@@ -24,7 +24,7 @@ int main() {
 #endif
 
     // Create window
-    GLFWwindow* window = glfwCreateWindow(800, 600, "ME!!", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(800, 600, "Quadrics", NULL, NULL);
     if (window == NULL) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
