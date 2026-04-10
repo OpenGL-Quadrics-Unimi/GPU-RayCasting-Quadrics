@@ -1,2 +1,45 @@
+# =========================
+# CMake & Build Artifacts
+# =========================
 build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CMakeScripts/
+Testing/
+install/
+
+# =========================
+# Compiled Binaries
+# =========================
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+*.out
+*.app
+QuadricRaycaster
+
+# =========================
+# macOS Specific
+# =========================
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# =========================
+# IDE & Editor Files
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

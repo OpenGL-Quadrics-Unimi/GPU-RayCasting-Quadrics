@@ -2,8 +2,10 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include "Shader.h"
-#include "Renderer.h"
+
+#include "Core/Shader.h"
+#include "Core/Renderer.h"
+#include "Geometry/Quadric.h" 
 #include <iostream>
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);

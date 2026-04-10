@@ -21,10 +21,18 @@ set(SOURCES
 )
 
 # Create the executable
-add_executable(${PROJECT_NAME} ${SOURCES})
+add_executable(QuadricRaycaster 
+    src/main.cpp 
+    src/Core/Renderer.cpp 
+    src/Geometry/Quadric.cpp
+    # Add glad.c here if it's compiled with your source
+)
+
+# Explicitly define the include directory for the target
+target_include_directories(QuadricRaycaster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Link libraries (macOS specific OpenGL linking)
-target_link_libraries(${PROJECT_NAME}
+target_link_libraries(QuadricRaycaster
     OpenGL::GL
     glfw
     glm::glm
