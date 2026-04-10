@@ -45,7 +45,11 @@ int main() {
         return -1;
     }
 
-    init();
+    Renderer renderer;
+
+    // Istantiate the buffers for the quad
+    renderer.initQuad();
+
     // Tell OpenGL the size of the rendering window so that it knows
     // how to display the data and coordinates wrt the window.
     // First two parameters: set location of lower left corner of the window
@@ -69,16 +73,12 @@ int main() {
         myShader.use();
 
         // Quadric matrix is defined as a unit sphere for now (for semplicity)
-        glm:: mat4 Q_matrix = glm::mat4(1.0f);
-
-        Q_matrix[3][3] = -1.0f; // Set the D coefficient to -1 for a unit sphere
-
+        glm::mat4 Q_matrix = Geometry::Quadric::createSphere();
         int qLoc = glGetUniformLocation(myShader.ID, "Quad");
-
         glUniformMatrix4fv(qLoc, 1, GL_FALSE, glm::value_ptr(Q_matrix));
-        glBindVertexArray(VAO);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
+
+        renderer.drawQuad();
+
         glfwSwapBuffers(window);
         glfwPollEvents();
     }

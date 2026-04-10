@@ -25,12 +25,14 @@ add_executable(QuadricRaycaster
     src/main.cpp 
     src/Core/Renderer.cpp 
     src/Geometry/Quadric.cpp
-    # Add glad.c here if it's compiled with your source
+    external/glad/src/glad.c
 )
 
 # Explicitly define the include directory for the target
-target_include_directories(QuadricRaycaster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-
+target_include_directories(QuadricRaycaster PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/glad/include
+)
 # Link libraries (macOS specific OpenGL linking)
 target_link_libraries(QuadricRaycaster
     OpenGL::GL
