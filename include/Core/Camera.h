@@ -1,6 +1,16 @@
 #pragma once
 
+#include <glad/glad.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+// Default camera values
+const GLfloat YAW         =  0.6f;
+const GLfloat PITCH       =  0.3f;
+const GLfloat DISTANCE    = 20.0f;
+const GLfloat SENSITIVITY =  0.005f;
+const GLfloat ZOOM        = 45.0f;
+
 
 // OrbitCamera: always looks at a target point, parametrized by
 // yaw (rotation around world Y), pitch (tilt up/down) and distance.
@@ -8,10 +18,22 @@
 // (like a molecule) from every angle.
 class Camera {
 public:
-    Camera(glm::vec3 target    = glm::vec3(0.0f),
-           float     distance  = 20.0f,
-           float     yaw       = 0.6f,   // radians
-           float     pitch     = 0.3f);  // radians
+    glm::vec3 Target;
+    GLfloat   Yaw;
+    GLfloat   Pitch;
+    GLfloat   Distance;
+
+    // Projection parameters
+    GLfloat Fov;         // vertical FOV, in degrees
+    GLfloat NearPlane;
+    GLfloat FarPlane;
+
+    GLfloat MouseSensitivity;
+
+    Camera(glm::vec3 target   = glm::vec3(0.0f),
+           GLfloat   distance = DISTANCE,
+           GLfloat   yaw      = YAW,
+           GLfloat   pitch    = PITCH);
 
     // Matrices to send to the shader
     glm::mat4 getViewMatrix() const;
@@ -20,19 +42,11 @@ public:
     // Camera world-space position 
     glm::vec3 getPosition() const;
 
-    // Interactive controls (will be driven by input in commit #6)
-    void orbit(float deltaYaw, float deltaPitch);
-    void zoom(float deltaDistance);
-    void setTarget(const glm::vec3& t) { target = t; }
+   // Reads a mouse movement and rotates the camera around the target
+    void ProcessMouseMovement(GLfloat xoffset, GLfloat yoffset,
+                              GLboolean constrainPitch = GL_TRUE);
 
-    // Projection parameters 
-    float fovY;    // vertical field of view, in radians
-    float nearZ; // near plane distance
-    float farZ; // far plane distance
+    // Reads a mouse scroll and moves the camera closer or farther
+    void ProcessMouseScroll(GLfloat yoffset);
 
-private:
-    glm::vec3 target;
-    float yaw;       // radians. Rotation around world Y
-    float pitch;     // radians. Tilt "up" or "down" horizon
-    float distance;  // from target to eye
 };
