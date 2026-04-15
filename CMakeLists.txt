@@ -1,40 +1,31 @@
 cmake_minimum_required(VERSION 3.10)
 project(QuadricRaycaster)
 
-# Set standard C++17
+# C++17 standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Point to your local headers
-include_directories(include)
-
-# Find Homebrew packages
+# External libraries (installed via Homebrew on macOS)
 find_package(OpenGL REQUIRED)
-find_package(glfw3 REQUIRED)
-find_package(glm REQUIRED)
+find_package(glfw3  REQUIRED)
+find_package(glm    REQUIRED)
 
-# Define source files
-set(SOURCES 
-    src/main.cpp 
-    src/Renderer.cpp
-    src/glad.c
-)
-
-# Create the executable
-add_executable(QuadricRaycaster 
-    src/main.cpp 
-    src/Core/Renderer.cpp 
+# Build the executable: sources are grouped by module
+# (main entry point, Core engine, Geometry, vendored third-party).
+add_executable(QuadricRaycaster
+    src/main.cpp
+    src/Core/Renderer.cpp
+    src/Core/Camera.cpp
     src/Geometry/Quadric.cpp
     external/glad/src/glad.c
-    src/Core/Camera.cpp
 )
 
-# Explicitly define the include directory for the target
-target_include_directories(QuadricRaycaster PRIVATE 
+target_include_directories(QuadricRaycaster PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/glad/include
 )
-# Link libraries (macOS specific OpenGL linking)
+
+# macOS-friendly OpenGL linking
 target_link_libraries(QuadricRaycaster
     OpenGL::GL
     glfw
