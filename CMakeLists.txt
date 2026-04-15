@@ -26,6 +26,7 @@ add_executable(QuadricRaycaster
     src/Core/Renderer.cpp 
     src/Geometry/Quadric.cpp
     external/glad/src/glad.c
+    src/Core/Camera.cpp
 )
 
 # Explicitly define the include directory for the target

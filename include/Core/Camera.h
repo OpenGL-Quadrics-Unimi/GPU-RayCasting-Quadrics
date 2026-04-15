@@ -14,8 +14,7 @@ const GLfloat ZOOM        = 45.0f;
 
 // OrbitCamera: always looks at a target point, parametrized by
 // yaw (rotation around world Y), pitch (tilt up/down) and distance.
-// This is the natural control scheme for inspecting a single object
-// (like a molecule) from every angle.
+
 class Camera {
 public:
     glm::vec3 Target;
@@ -35,12 +34,14 @@ public:
            GLfloat   yaw      = YAW,
            GLfloat   pitch    = PITCH);
 
-    // Matrices to send to the shader
-    glm::mat4 getViewMatrix() const;
-    glm::mat4 getProjectionMatrix(float aspect) const;
+    // Returns the view matrix, built with glm::lookAt
+    glm::mat4 GetViewMatrix() const;
 
-    // Camera world-space position 
-    glm::vec3 getPosition() const;
+    // Returns the projection matrix for the given aspect ratio
+    glm::mat4 GetProjectionMatrix(GLfloat aspect) const;
+
+    // Returns the camera position in world space
+    glm::vec3 GetPosition() const;
 
    // Reads a mouse movement and rotates the camera around the target
     void ProcessMouseMovement(GLfloat xoffset, GLfloat yoffset,

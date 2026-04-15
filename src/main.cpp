@@ -6,6 +6,7 @@
 #include "Core/Shader.h"
 #include "Core/Renderer.h"
 #include "Geometry/Quadric.h" 
+#include "Core/Camera.h"
 #include <iostream>
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -61,6 +62,8 @@ int main() {
     // Create the vertex shader and fragment shader, and link them to create a shader program
     Shader myShader("../shaders/quad.vert", "../shaders/quad.frag");
 
+    // Camera initialization 
+    Camera camera(glm::vec3(0.0f), 5.0f); // (target, distance)
     // Render loop
     while (!glfwWindowShouldClose(window)) {
         // input
