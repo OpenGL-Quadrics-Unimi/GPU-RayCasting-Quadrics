@@ -74,22 +74,28 @@ int main() {
 
     // Create the vertex shader and fragment shader, and link them to create a shader program
     Shader myShader("../shaders/quad.vert", "../shaders/quad.frag");
+    
+    glm::mat4 Q_world = Geometry::Quadric::createSphere(); // Example: create a sphere quadric, just for testing (replace later!!)
 
     // Render loop
-    while (!glfwWindowShouldClose(window)) {
-        // input
+        while (!glfwWindowShouldClose(window)) {
         processInput(window);
-        // rendering commands
 
-        glClearColor(1.0f, 0.3f, 0.5f, 1.0f);
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        myShader.use();
+        // Recompute camera matrices every frame so mouse orbit is reflected
+        GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
+        glm::mat4 view  = camera.GetViewMatrix();
+        glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
 
-        // Quadric matrix is defined as a unit sphere for now (for semplicity)
-        glm::mat4 Q_matrix = Geometry::Quadric::createSphere();
-        int qLoc = glGetUniformLocation(myShader.ID, "Quad");
-        glUniformMatrix4fv(qLoc, 1, GL_FALSE, glm::value_ptr(Q_matrix));
+        // Transform Q to eye space: Q_eye = V^{-T} * Q_world * V^{-1} (Sigg 2006, §3)
+        glm::mat4 viewInv = glm::inverse(view);
+        glm::mat4 Q_eye   = glm::transpose(viewInv) * Q_world * viewInv;
+
+        myShader.use();
+        myShader.setMat4("Quad",        Q_eye);
+        myShader.setMat4("projInverse", glm::inverse(proj));
 
         renderer.drawQuad();
 
