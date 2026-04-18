@@ -18,6 +18,7 @@ add_executable(QuadricRaycaster
     src/Core/Camera.cpp
     src/Geometry/Quadric.cpp
     external/glad/src/glad.c
+    src/Geometry/PDB.cpp
 )
 
 target_include_directories(QuadricRaycaster PRIVATE
