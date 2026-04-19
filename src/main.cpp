@@ -7,6 +7,8 @@
 #include "Core/Renderer.h"
 #include "Geometry/Quadric.h" 
 #include "Core/Camera.h"
+#include "Geometry/PDB.h"
+
 #include <iostream>
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -59,49 +61,70 @@ int main() {
         return -1;
     }
 
-    Renderer renderer;
+    // Renderer renderer;
 
-    // One fullscreen quad; we'll raycast a quadric through each fragment
-    renderer.initQuad();
+    // Depth test needed so closer atoms draw in front of farther ones
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_PROGRAM_POINT_SIZE); // make the vertex shader control point size
 
-    // Tell OpenGL the size of the rendering window so that it knows
-    // how to display the data and coordinates wrt the window.
-    // First two parameters: set location of lower left corner of the window
-    // Third and fourth parameters: set width and height of the rendering window
-    int width, height;
-    glfwGetFramebufferSize(window, &width, &height);
-    glViewport(0, 0, width, height);
+    // Load molecule from PDB file and set camera distance:
+    // camera distance is set from the bounding radius
+    // so the whole molecule always fits in view
+    PDB molecule;
+    if (!molecule.load("../data/1crn.pdb"))
+        std::cerr << "ERROR: could not load PDB file" << std::endl;
+    else
+        std::cout << "Loaded " << molecule.Atoms.size() << " atoms." << std::endl;
 
-    // Create the vertex shader and fragment shader, and link them to create a shader program
-    Shader myShader("../shaders/quad.vert", "../shaders/quad.frag");
-    
-    glm::mat4 Q_world = Geometry::Quadric::createSphere(); // Example: create a sphere quadric, just for testing (replace later!!)
+    camera.Distance = molecule.BoundingRadius * 2.5f;
+
+    // Upload atom positions to the GPU (world space, centred at origin)
+    std::vector<glm::vec3> positions;
+    positions.reserve(molecule.Atoms.size());
+    for (const Atom& a : molecule.Atoms)
+        positions.push_back(a.Position);
+
+    GLuint atomVAO, atomVBO;
+    glGenVertexArrays(1, &atomVAO);
+    glGenBuffers(1, &atomVBO);
+
+    glBindVertexArray(atomVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, atomVBO);
+    glBufferData(GL_ARRAY_BUFFER,
+                 positions.size() * sizeof(glm::vec3),
+                 positions.data(),
+                 GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
+
+    Shader atomShader("../shaders/atom.vert", "../shaders/atom.frag");
 
     // Render loop
-        while (!glfwWindowShouldClose(window)) {
+    while (!glfwWindowShouldClose(window)) {
         processInput(window);
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Recompute camera matrices every frame so mouse orbit is reflected
         GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
         glm::mat4 view  = camera.GetViewMatrix();
         glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
 
-        // Transform Q to eye space: Q_eye = V^{-T} * Q_world * V^{-1} (Sigg 2006, §3)
-        glm::mat4 viewInv = glm::inverse(view);
-        glm::mat4 Q_eye   = glm::transpose(viewInv) * Q_world * viewInv;
+        atomShader.use();
+        atomShader.setMat4("view",       view);
+        atomShader.setMat4("projection", proj);
 
-        myShader.use();
-        myShader.setMat4("Quad",        Q_eye);
-        myShader.setMat4("projInverse", glm::inverse(proj));
-
-        renderer.drawQuad();
+        glBindVertexArray(atomVAO);
+        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(positions.size()));
+        glBindVertexArray(0);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
+
+    glDeleteVertexArrays(1, &atomVAO);
+    glDeleteBuffers(1, &atomVBO);
 
     glfwTerminate();
     return 0;
