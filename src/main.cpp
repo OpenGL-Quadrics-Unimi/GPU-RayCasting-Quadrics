@@ -110,10 +110,13 @@ int main() {
         GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
         glm::mat4 view  = camera.GetViewMatrix();
         glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
+        glm::mat4 model = glm::mat4(1.0f);
 
         atomShader.use();
+        atomShader.setMat4("model", model);
         atomShader.setMat4("view",       view);
         atomShader.setMat4("projection", proj);
+        
 
         glBindVertexArray(atomVAO);
         glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(positions.size()));
