@@ -24,6 +24,12 @@ GLfloat lastY          = SCR_HEIGHT / 2.0f;
 bool firstMouse        = true;
 bool leftButtonPressed = false;
 
+struct ImpostorVertex {
+    glm::vec3 Center;
+    glm::vec2 Corner;
+    float     Radius;
+    glm::vec3 Color;
+};
 
 int main() {
     // Initialize GLFW
@@ -73,7 +79,48 @@ int main() {
         std::cout << "Loaded " << molecule.Atoms.size() << " atoms." << std::endl;
 
     camera.Distance = molecule.BoundingRadius * 2.5f;
+        const glm::vec2 corners[4] = {
+        {-1.f, -1.f}, { 1.f, -1.f}, { 1.f,  1.f}, {-1.f,  1.f}
+    };
 
+    std::vector<ImpostorVertex> vertices;
+    std::vector<GLuint>         indices;
+    vertices.reserve(molecule.Atoms.size() * 4);
+    indices.reserve(molecule.Atoms.size() * 6);
+
+    for (size_t i = 0; i < molecule.Atoms.size(); ++i) {
+        const Atom& a     = molecule.Atoms[i];
+        AtomStyle   style = PDB::getAtomStyle(a.Element);
+
+        for (int j = 0; j < 4; ++j)
+            vertices.push_back({a.Position, corners[j], style.Radius, style.Color});
+
+        GLuint base = static_cast<GLuint>(i * 4);
+        indices.insert(indices.end(), {base, base+1, base+2, base, base+2, base+3});
+    }
+
+    GLuint impostorVAO, impostorVBO, impostorEBO;
+    glGenVertexArrays(1, &impostorVAO);
+    glGenBuffers(1, &impostorVBO);
+    glGenBuffers(1, &impostorEBO);
+
+    glBindVertexArray(impostorVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, impostorVBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(ImpostorVertex), vertices.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, impostorEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ImpostorVertex), (void*)offsetof(ImpostorVertex, Center));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(ImpostorVertex), (void*)offsetof(ImpostorVertex, Corner));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(ImpostorVertex), (void*)offsetof(ImpostorVertex, Radius));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(ImpostorVertex), (void*)offsetof(ImpostorVertex, Color));
+    glEnableVertexAttribArray(3);
+    glBindVertexArray(0);
+
+    Shader quadricShader("../shaders/quadric.vert", "../shaders/quadric.frag");
     // Upload atom positions to the GPU (world space, centred at origin)
     std::vector<glm::vec3> positions;
     positions.reserve(molecule.Atoms.size());
@@ -107,21 +154,21 @@ int main() {
         glm::mat4 view  = camera.GetViewMatrix();
         glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
 
-        atomShader.use();
-        atomShader.setMat4("view",       view);
-        atomShader.setMat4("projection", proj);
-        
+        quadricShader.use();
+        quadricShader.setMat4("view",       view);
+        quadricShader.setMat4("projection", proj);
 
-        glBindVertexArray(atomVAO);
-        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(positions.size()));
+        glBindVertexArray(impostorVAO);
+        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
-    glDeleteVertexArrays(1, &atomVAO);
-    glDeleteBuffers(1, &atomVBO);
+    glDeleteVertexArrays(1, &impostorVAO);
+    glDeleteBuffers(1, &impostorVBO);
+    glDeleteBuffers(1, &impostorEBO);
 
     glfwTerminate();
     return 0;
