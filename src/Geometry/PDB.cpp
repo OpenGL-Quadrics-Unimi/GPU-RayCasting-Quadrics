@@ -72,7 +72,16 @@ bool PDB::load(const std::string& path) {
     return true;
 }
 
-// CPK colours and van der Waals radii (Bondi 1964).
+// CPK colours and van der Waals radii.
+//
+// Colours: Corey-Pauling-Koltun (CPK) convention, standard in molecular viewers
+//          (Jmol, RCSB PDB). Each element has an agreed-upon colour for quick
+//          visual identification.
+//
+// Radii:   Bondi, A. (1964). "van der Waals Volumes and Radii."
+//          Journal of Physical Chemistry, 68(3), 441-451.
+//
+
 AtomStyle PDB::getAtomStyle(const char element[3]) {
     char c0 = element[0], c1 = element[1];
     auto is1 = [&](char a)         { return c0 == a && c1 == '\0'; };

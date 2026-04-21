@@ -4,8 +4,6 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "Core/Shader.h"
-#include "Core/Renderer.h"
-#include "Geometry/Quadric.h" 
 #include "Core/Camera.h"
 #include "Geometry/PDB.h"
 
@@ -61,8 +59,6 @@ int main() {
         return -1;
     }
 
-    // Renderer renderer;
-
     // Depth test needed so closer atoms draw in front of farther ones
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_PROGRAM_POINT_SIZE); // make the vertex shader control point size
@@ -110,10 +106,8 @@ int main() {
         GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
         glm::mat4 view  = camera.GetViewMatrix();
         glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
-        glm::mat4 model = glm::mat4(1.0f);
 
         atomShader.use();
-        atomShader.setMat4("model", model);
         atomShader.setMat4("view",       view);
         atomShader.setMat4("projection", proj);
         
