@@ -1,8 +1,8 @@
-/*Atom data (position + VdW radius)
-→ CPU: build 4 vertices per atom with corner offsets
-→ Vertex shader: move center to eye space, expand corners along screen plane
-→ Rasteriser: fills the quad with fragments
-→ Fragment shader: flat CPK colour for now */
+/* Atom impostor pipeline (Sigg et al. 2006):
+   CPU     → 4 vertices per atom with billboard corner offsets
+   Vertex  → move centre to eye space, expand corners in screen plane
+   Raster  → fills the quad with fragments
+   Fragment→ ray-sphere intersection, depth write, Phong shading */
 
 #version 410 core
 layout(location = 0) in vec3  aCenter; // atom centre in world space
@@ -10,8 +10,10 @@ layout(location = 1) in vec2  aCorner; // billboard corner, in [-1, 1]
 layout(location = 2) in float aRadius; // van der Waals radius (Angstroms)
 layout(location = 3) in vec3  aColor;  // CPK colour
 
-out vec3 vColor;
-out vec2 vCorner; 
+out vec3  vCenterEye; // sphere centre in eye space (for ray-sphere intersection)
+out float vRadius;    // van der Waals radius, passed to fragment shader
+out vec3  vColor;     // CPK colour
+out vec2  vNDC;       // NDC position of this corner — interpolated to give per-fragment ray direction
 
 uniform mat4 view;
 uniform mat4 projection;
@@ -20,13 +22,22 @@ void main() {
     // 1. Move atom centre from world space to eye space
     vec4 eyeCenter = view * vec4(aCenter, 1.0);
 
-    // 2. Expand the quad in eye space so it covers the sphere's silhouette.
-    //    XY in eye space = screen plane, so this keeps the quad facing the camera.
+    // 2. Pass centre and radius before expanding — fragment shader needs
+    //    the original sphere centre, not the expanded corner position
+    vCenterEye = eyeCenter.xyz;
+    vRadius    = aRadius;
+    vColor     = aColor;
+
+    // 3. Expand the quad in eye space so it covers the sphere's silhouette.
+    //    XY in eye space is the screen plane, so this keeps the quad facing the camera.
     eyeCenter.xy += aCorner * aRadius;
 
-    // 3. Eye space → clip space
+    // 4. Eye space → clip space
     gl_Position = projection * eyeCenter;
 
-    vColor  = aColor;
-    vCorner = aCorner;
+    // 5. Store NDC position of this corner.
+    //    All four corners share the same clip-space w (same eye-space z), so this
+    //    varying interpolates linearly across the quad — giving the correct NDC at
+    //    every fragment without needing the viewport dimensions.
+    vNDC = gl_Position.xy / gl_Position.w;
 }

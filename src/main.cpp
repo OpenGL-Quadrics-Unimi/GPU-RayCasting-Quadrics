@@ -67,7 +67,6 @@ int main() {
 
     // Depth test needed so closer atoms draw in front of farther ones
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_PROGRAM_POINT_SIZE); // make the vertex shader control point size
 
     // Load molecule from PDB file and set camera distance:
     // camera distance is set from the bounding radius
@@ -121,27 +120,6 @@ int main() {
     glBindVertexArray(0);
 
     Shader quadricShader("../shaders/quadric.vert", "../shaders/quadric.frag");
-    // Upload atom positions to the GPU (world space, centred at origin)
-    std::vector<glm::vec3> positions;
-    positions.reserve(molecule.Atoms.size());
-    for (const Atom& a : molecule.Atoms)
-        positions.push_back(a.Position);
-
-    GLuint atomVAO, atomVBO;
-    glGenVertexArrays(1, &atomVAO);
-    glGenBuffers(1, &atomVBO);
-
-    glBindVertexArray(atomVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, atomVBO);
-    glBufferData(GL_ARRAY_BUFFER,
-                 positions.size() * sizeof(glm::vec3),
-                 positions.data(),
-                 GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
-    glEnableVertexAttribArray(0);
-    glBindVertexArray(0);
-
-    Shader atomShader("../shaders/atom.vert", "../shaders/atom.frag");
 
     // Render loop
     while (!glfwWindowShouldClose(window)) {
@@ -155,6 +133,8 @@ int main() {
         glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
 
         quadricShader.use();
+        quadricShader.setMat4("uProj",      proj);
+        quadricShader.setMat4("uInvProj",   glm::inverse(proj));
         quadricShader.setMat4("view",       view);
         quadricShader.setMat4("projection", proj);
 

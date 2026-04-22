@@ -78,7 +78,7 @@ bool PDB::load(const std::string& path) {
 //          (Jmol, RCSB PDB). Each element has an agreed-upon colour for quick
 //          visual identification.
 //
-// Radii:   Bondi, A. (1964). "van der Waals Volumes and Radii."
+// Radii: Bondi, A. (1964). "van der Waals Volumes and Radii."
 //          Journal of Physical Chemistry, 68(3), 441-451.
 //
 
