@@ -3,22 +3,18 @@
 in vec3  vCenterEye;
 in float vRadius;
 in vec3  vColor;
-in vec2  vNDC;       // interpolated NDC position — see quadric.vert for why this works
+in vec2  vNDC;       // interpolated NDC position 
 
 uniform mat4 uInvProj;   // eye space ray reconstruction
-uniform mat4 uProj;      // eye space → clip (for depth write)
+uniform mat4 uProj;      // eye space → clip 
 
-// TODO (commit #15): replace with G-buffer MRT outputs once FBO is set up:
-//   layout(location = 0) out vec3 oDiffuse;
-//   layout(location = 1) out vec3 oNormal;
 out vec4 FragColor;
 
 void main()
 {
-    // Reconstruct an eye-space ray from the interpolated NDC position.
-    // Using vNDC (from the vertex shader) instead of gl_FragCoord avoids a
-    // dependency on the framebuffer size, which differs from window size on
-    // HiDPI / Retina displays and would send every ray in the wrong direction.
+    // Reconstruct eye-space ray from the interpolated NDC position.
+    // Using vNDC for ray reconstruction is more accurate than using gl_FragCoord, which is in window space and has less precision.
+    
     vec4 nearEye4 = uInvProj * vec4(vNDC, -1.0, 1.0);
     vec4 farEye4  = uInvProj * vec4(vNDC,  1.0, 1.0);
     vec3 rO = nearEye4.xyz / nearEye4.w;
