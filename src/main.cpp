@@ -31,6 +31,65 @@ struct ImpostorVertex {
     glm::vec3 Color;
 };
 
+// G-buffer for deferred shading, storing diffuse colour, normal, and depth
+// Multiple Render Targets 
+struct GBuffer {
+    GLuint fbo        = 0;
+    GLuint diffuseTex = 0, normalTex = 0, depthTex = 0;
+    int    width = 0, height = 0;
+
+    void destroy() {
+        if (diffuseTex) glDeleteTextures(1, &diffuseTex);
+        if (normalTex)  glDeleteTextures(1, &normalTex);
+        if (depthTex)   glDeleteTextures(1, &depthTex);
+        if (fbo)        glDeleteFramebuffers(1, &fbo);
+        diffuseTex = normalTex = depthTex = fbo = 0;
+    }
+
+    void create(int w, int h) {
+        destroy(); width = w; height = h;
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+        // I used GL_LINEAR on the color targets so that when the G-buffer is sampled at window resolution during the composite pass,
+       // the SSAA downsampling looks smoother and cleaner.
+        auto mkColor = [&](GLuint& t, GLenum attach) {
+            glGenTextures(1, &t);
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0,
+                         GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_EDGE);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, attach,
+                                   GL_TEXTURE_2D, t, 0);
+        };
+        mkColor(diffuseTex, GL_COLOR_ATTACHMENT0);
+        mkColor(normalTex,  GL_COLOR_ATTACHMENT1);
+
+        // Depth;nearest filter — read exact depth values, not interpolated ones.
+        glGenTextures(1, &depthTex);
+        glBindTexture(GL_TEXTURE_2D, depthTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0,
+                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D, depthTex, 0);
+
+        // Telling OpenGL we're writing two colour attachments simultaneously.
+        GLenum bufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+        glDrawBuffers(2, bufs);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::cerr << "ERROR: G-buffer FBO incomplete\n";
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+};
+
 int main() {
     // Initialize GLFW
     glfwInit();
@@ -64,7 +123,9 @@ int main() {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
-
+    // G-buffer at full window resolution (supersampling- not yet).
+     GBuffer gbuf;
+     gbuf.create(SCR_WIDTH, SCR_HEIGHT);
     // Depth test needed so closer atoms draw in front of farther ones
     glEnable(GL_DEPTH_TEST);
 
@@ -149,7 +210,7 @@ int main() {
     glDeleteVertexArrays(1, &impostorVAO);
     glDeleteBuffers(1, &impostorVBO);
     glDeleteBuffers(1, &impostorEBO);
-
+    gbuf.destroy();
     glfwTerminate();
     return 0;
 }
