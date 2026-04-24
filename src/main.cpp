@@ -186,23 +186,39 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         processInput(window);
 
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+//I rendered spheres into the G-buffer using ray tracing: the geometry pass is now complete. 
+//The screen will remain black until the lighting pass reads the G-buffer and produces the final output.
+glBindFramebuffer(GL_FRAMEBUFFER, gbuf.fbo);
+glViewport(0, 0, gbuf.width, gbuf.height);
+glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
-        glm::mat4 view  = camera.GetViewMatrix();
-        glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
+GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
+glm::mat4 view  = camera.GetViewMatrix();
+glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
+glm::mat4 model = glm::mat4(1.0f);
 
-        quadricShader.use();
-        quadricShader.setMat4("uProj",      proj);
-        quadricShader.setMat4("uInvProj",   glm::inverse(proj));
-        quadricShader.setMat4("view",       view);
-        quadricShader.setMat4("projection", proj);
+quadricShader.use();
+quadricShader.setMat4("uView",    view);
+quadricShader.setMat4("uProj",    proj);
+quadricShader.setMat4("uModel",   model);
+quadricShader.setMat4("uInvProj", glm::inverse(proj));
+quadricShader.setVec2("uViewport",
+    glm::vec2(float(gbuf.width), float(gbuf.height)));
 
-        glBindVertexArray(impostorVAO);
-        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
+glBindVertexArray(impostorVAO);
+glDrawElements(GL_TRIANGLES,
+               static_cast<GLsizei>(indices.size()),
+               GL_UNSIGNED_INT, 0);
+glBindVertexArray(0);
 
+//I unbound the G-buffer, so the default framebuffer is now active
+//but it still contains nothing.
+glBindFramebuffer(GL_FRAMEBUFFER, 0);
+glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+//the screen is still black — I will add the lighting pass in the next commit
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
