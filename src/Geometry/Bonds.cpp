@@ -40,8 +40,7 @@ void Bonds::build(const std::vector<Atom>& atoms, float tolerance) {
 
     // Check every unique pair of atoms.
     // Two atoms are bonded if their distance is within the sum of their
-    // covalent radii plus the tolerance. This is O(n²) — fine for
-    // proteins up to a few thousand atoms.
+    // covalent radii plus the tolerance. 
     for (size_t i = 0; i < atoms.size(); ++i) {
         for (size_t j = i + 1; j < atoms.size(); ++j) {
             float maxDist = getCovalentRadius(atoms[i].Element)
