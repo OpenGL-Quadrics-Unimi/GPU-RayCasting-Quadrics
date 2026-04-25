@@ -8,7 +8,8 @@ in vec2  vNDC;       // interpolated NDC position
 uniform mat4 uInvProj;   // eye space ray reconstruction
 uniform mat4 uProj;      // eye space → clip 
 
-out vec4 FragColor;
+layout(location = 0) out vec4 oDiffuse;
+layout(location = 1) out vec4 oNormal;
 
 void main()
 {
@@ -36,8 +37,9 @@ void main()
     vec4 clipPos = uProj * vec4(posEye, 1.0);
     gl_FragDepth = 0.5 * (clipPos.z / clipPos.w) + 0.5;
 
-    // Simple diffuse shading — temporary until G-buffer is set up in commit #15
+    // Diffuse shading — written to the G-buffer for the lighting pass
     vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
     float diff    = max(dot(normalEye, lightDir), 0.15);
-    FragColor     = vec4(vColor * diff, 1.0);
+    oDiffuse = vec4(vColor * diff, 1.0);
+    oNormal  = vec4(normalEye * 0.5 + 0.5, 1.0);  // pack [-1,1] → [0,1] for RGB storage
 }

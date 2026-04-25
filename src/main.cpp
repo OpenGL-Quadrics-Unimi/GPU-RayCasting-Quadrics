@@ -51,22 +51,31 @@ struct GBuffer {
         glGenFramebuffers(1, &fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
-        // I used GL_LINEAR on the color targets so that when the G-buffer is sampled at window resolution during the composite pass,
-       // the SSAA downsampling looks smoother and cleaner.
-        auto mkColor = [&](GLuint& t, GLenum attach) {
-            glGenTextures(1, &t);
-            glBindTexture(GL_TEXTURE_2D, t);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0,
-                         GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_EDGE);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, attach,
-                                   GL_TEXTURE_2D, t, 0);
-        };
-        mkColor(diffuseTex, GL_COLOR_ATTACHMENT0);
-        mkColor(normalTex,  GL_COLOR_ATTACHMENT1);
+        // Diffuse colour — GL_RGB8 is enough (values are in [0,1])
+        glGenTextures(1, &diffuseTex);
+        glBindTexture(GL_TEXTURE_2D, diffuseTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0,
+                     GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, diffuseTex, 0);
+
+        // Eye-space normals — must be GL_RGB16F because normals are signed floats in [-1,1].
+        // GL_RGB8 cannot represent negative values without manual encoding, which would
+        // cause visible banding in the lighting pass.
+        glGenTextures(1, &normalTex);
+        glBindTexture(GL_TEXTURE_2D, normalTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, w, h, 0,
+                     GL_RGB, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                               GL_TEXTURE_2D, normalTex, 0);
 
         // Depth;nearest filter — read exact depth values, not interpolated ones.
         glGenTextures(1, &depthTex);

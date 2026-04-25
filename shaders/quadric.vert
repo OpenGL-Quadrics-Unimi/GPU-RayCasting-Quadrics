@@ -15,12 +15,13 @@ out float vRadius;    // van der Waals radius, passed to fragment shader
 out vec3  vColor;     // CPK colour
 out vec2  vNDC;       // NDC position of this corner — interpolated to give per-fragment ray direction
 
-uniform mat4 view;
-uniform mat4 projection;
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform mat4 uModel;
 
 void main() {
     // 1. Move atom centre from world space to eye space
-    vec4 eyeCenter = view * vec4(aCenter, 1.0);
+    vec4 eyeCenter = uView * vec4(aCenter, 1.0);
 
     // 2. Pass centre and radius before expanding — fragment shader needs
     //    the original sphere centre, not the expanded corner position
@@ -33,7 +34,7 @@ void main() {
     eyeCenter.xy += aCorner * aRadius;
 
     // 4. Eye space → clip space
-    gl_Position = projection * eyeCenter;
+    gl_Position = uProj * eyeCenter;
 
     // 5. Store NDC position of this corner.
     //    All four corners share the same clip-space w (same eye-space z), so this
