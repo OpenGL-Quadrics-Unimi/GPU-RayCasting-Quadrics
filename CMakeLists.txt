@@ -19,6 +19,7 @@ add_executable(QuadricRaycaster
     src/Geometry/Quadric.cpp
     external/glad/src/glad.c
     src/Geometry/PDB.cpp
+    src/Geometry/Bonds.cpp
 )
 
 target_include_directories(QuadricRaycaster PRIVATE

@@ -6,6 +6,7 @@
 #include "Core/Shader.h"
 #include "Core/Camera.h"
 #include "Geometry/PDB.h"
+#include "Geometry/Bonds.h"
 
 #include <iostream>
 
@@ -146,6 +147,10 @@ int main() {
         std::cerr << "ERROR: could not load PDB file" << std::endl;
     else
         std::cout << "Loaded " << molecule.Atoms.size() << " atoms." << std::endl;
+
+    Bonds bonds;
+    bonds.build(molecule.Atoms);
+    std::cout << "Found " << bonds.List.size() << " bonds." << std::endl;
 
     camera.Distance = molecule.BoundingRadius * 2.5f;
         const glm::vec2 corners[4] = {
