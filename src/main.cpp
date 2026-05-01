@@ -2,7 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-
+#include "Core/Renderer.h"
 #include "Core/Shader.h"
 #include "Core/Camera.h"
 #include "Geometry/PDB.h"
@@ -24,6 +24,12 @@ GLfloat lastX          = SCR_WIDTH  / 2.0f;
 GLfloat lastY          = SCR_HEIGHT / 2.0f;
 bool firstMouse        = true;
 bool leftButtonPressed = false;
+
+glm::vec3 lightDirWorld   = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
+glm::vec3 lightColor      = glm::vec3(1.0f, 1.0f, 1.0f);
+float     ambientStrength = 0.15f;
+float     specStrength    = 0.5f;
+float     shininess       = 32.0f;
 
 struct ImpostorVertex {
     glm::vec3 Center;
@@ -152,16 +158,57 @@ int main() {
     bonds.build(molecule.Atoms);
     std::cout << "Found " << bonds.List.size() << " bonds." << std::endl;
 
+    // Calculate molecule's center (bounding center)
+    glm::vec3 boundingCenter = glm::vec3(0.0f);
+    for (const auto& atom : molecule.Atoms) {
+        boundingCenter += atom.Position;
+    }
+    boundingCenter /= static_cast<float>(molecule.Atoms.size());
+    
+    std::cout << "DEBUG: BoundingCenter BEFORE centering = (" << boundingCenter.x << ", " 
+              << boundingCenter.y << ", " << boundingCenter.z << ")\n";
+    
+    // Center atoms at origin
+    for (auto& atom : molecule.Atoms) {
+        atom.Position -= boundingCenter;
+    }
+    
+    // Verify centering worked
+    glm::vec3 verifyCenter = glm::vec3(0.0f);
+    for (const auto& atom : molecule.Atoms) {
+        verifyCenter += atom.Position;
+    }
+    verifyCenter /= static_cast<float>(molecule.Atoms.size());
+    
+    std::cout << "DEBUG: BoundingCenter AFTER centering = (" << verifyCenter.x << ", " 
+              << verifyCenter.y << ", " << verifyCenter.z << ")\n";
+    std::cout << "DEBUG: First atom position = (" << molecule.Atoms[0].Position.x << ", "
+              << molecule.Atoms[0].Position.y << ", " << molecule.Atoms[0].Position.z << ")\n";
+    // Now camera target can be at origin
+    camera.Target = glm::vec3(0.0f);
     camera.Distance = molecule.BoundingRadius * 2.5f;
+    camera.Yaw = 0.0f;
+    camera.Pitch = glm::radians(20.0f);
+     // DEBUG
+    glm::vec3 camPos = camera.GetPosition();
+    std::cout << "DEBUG: Camera Target = (0, 0, 0)\n";
+    std::cout << "DEBUG: Camera Position = (" << camPos.x << ", " 
+              << camPos.y << ", " << camPos.z << ")\n";
+    std::cout << "DEBUG: Camera Distance = " << camera.Distance << "\n";
+    std::cout << "DEBUG: Camera Yaw = " << camera.Yaw << " rad\n";
+    std::cout << "DEBUG: Camera Pitch = " << camera.Pitch << " rad\n";
         const glm::vec2 corners[4] = {
         {-1.f, -1.f}, { 1.f, -1.f}, { 1.f,  1.f}, {-1.f,  1.f}
     };
 
-    std::vector<ImpostorVertex> vertices;
+    std::vector<ImpostorVertex>vertices;
     std::vector<GLuint>         indices;
     vertices.reserve(molecule.Atoms.size() * 4);
     indices.reserve(molecule.Atoms.size() * 6);
-
+     std::cout << "DEBUG: First atom position (after centering): (" 
+              << molecule.Atoms[0].Position.x << ", "
+              << molecule.Atoms[0].Position.y << ", "
+              << molecule.Atoms[0].Position.z << ")\n";
     for (size_t i = 0; i < molecule.Atoms.size(); ++i) {
         const Atom& a     = molecule.Atoms[i];
         AtomStyle   style = PDB::getAtomStyle(a.Element);
@@ -196,53 +243,94 @@ int main() {
 
     Shader quadricShader("../shaders/quadric.vert", "../shaders/quadric.frag");
 
+    Shader lightingShader("../shaders/lighting.vert",
+                          "../shaders/lighting.frag");
+
+    Renderer screenQuad;
+    screenQuad.initQuad();
     // Render loop
     while (!glfwWindowShouldClose(window)) {
         processInput(window);
 
-//I rendered spheres into the G-buffer using ray tracing: the geometry pass is now complete. 
-//The screen will remain black until the lighting pass reads the G-buffer and produces the final output.
-glBindFramebuffer(GL_FRAMEBUFFER, gbuf.fbo);
-glViewport(0, 0, gbuf.width, gbuf.height);
-glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        //I rendered spheres into the G-buffer using ray tracing: the geometry pass is now complete. 
+        //The screen will remain black until the lighting pass reads the G-buffer and produces the final output.
+        glBindFramebuffer(GL_FRAMEBUFFER, gbuf.fbo);
+        glViewport(0, 0, gbuf.width, gbuf.height);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
-glm::mat4 view  = camera.GetViewMatrix();
-glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
-glm::mat4 model = glm::mat4(1.0f);
+        GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
+        glm::mat4 view  = camera.GetViewMatrix();
+        glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
+        glm::mat4 model = glm::mat4(1.0f);
 
-quadricShader.use();
-quadricShader.setMat4("uView",    view);
-quadricShader.setMat4("uProj",    proj);
-quadricShader.setMat4("uModel",   model);
-quadricShader.setMat4("uInvProj", glm::inverse(proj));
-quadricShader.setVec2("uViewport",
-    glm::vec2(float(gbuf.width), float(gbuf.height)));
+        quadricShader.use();
+        quadricShader.setMat4("uView",    view);
+        quadricShader.setMat4("uProj",    proj);
+        quadricShader.setMat4("uModel",   model);
+        quadricShader.setMat4("uInvProj", glm::inverse(proj));
+        quadricShader.setVec2("uViewport",
+            glm::vec2(float(gbuf.width), float(gbuf.height)));
 
-glBindVertexArray(impostorVAO);
-glDrawElements(GL_TRIANGLES,
+        glBindVertexArray(impostorVAO);
+        glDrawElements(GL_TRIANGLES,
                static_cast<GLsizei>(indices.size()),
                GL_UNSIGNED_INT, 0);
-glBindVertexArray(0);
+        glBindVertexArray(0);
 
-//I unbound the G-buffer, so the default framebuffer is now active
-//but it still contains nothing.
-glBindFramebuffer(GL_FRAMEBUFFER, 0);
-glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
-glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-//the screen is still black — I will add the lighting pass in the next commit
+
+        // === LIGHTING PASS ===
+       // Read the G-buffer, apply Phong, write to the default framebuffer.
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // The fullscreen quad covers everything; depth test would just reject it
+        // because the default-FB depth was cleared to 1.0.
+        glDisable(GL_DEPTH_TEST);
+
+        lightingShader.use();
+
+        // Bind G-buffer textures to units 0/1/2
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, gbuf.diffuseTex);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, gbuf.normalTex);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, gbuf.depthTex);
+
+        lightingShader.setInt("gDiffuse", 0);
+        lightingShader.setInt("gNormal",  1);
+        lightingShader.setInt("gDepth",   2);
+
+        // Position is reconstructed from depth — needs the same proj as geom pass
+        lightingShader.setMat4("uInvProj", glm::inverse(proj));
+
+        // World-space light -> eye space (rotation only for a directional light)
+        glm::vec3 lightDirEye = glm::normalize(glm::mat3(view) * lightDirWorld);
+        lightingShader.setVec3 ("uLightDirEye",  lightDirEye);
+        lightingShader.setVec3 ("uLightColor",   lightColor);
+        lightingShader.setFloat("uAmbient",      ambientStrength);
+        lightingShader.setFloat("uSpecStrength", specStrength);
+        lightingShader.setFloat("uShininess",    shininess);
+
+        screenQuad.drawQuad();
+
+        // Restore depth testing for the next frame's geometry pass
+        glEnable(GL_DEPTH_TEST);
+
         glfwSwapBuffers(window);
         glfwPollEvents();
-    }
+}
+        
 
-    glDeleteVertexArrays(1, &impostorVAO);
-    glDeleteBuffers(1, &impostorVBO);
-    glDeleteBuffers(1, &impostorEBO);
-    gbuf.destroy();
-    glfwTerminate();
-    return 0;
+glDeleteVertexArrays(1, &impostorVAO);
+glDeleteBuffers(1, &impostorVBO);
+glDeleteBuffers(1, &impostorEBO);
+gbuf.destroy();
+glfwTerminate();
+return 0;
 }
 
 
