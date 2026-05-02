@@ -25,6 +25,11 @@ GLfloat lastY          = SCR_HEIGHT / 2.0f;
 bool firstMouse        = true;
 bool leftButtonPressed = false;
 
+// Actual framebuffer size — differs from SCR_WIDTH/SCR_HEIGHT on Retina/HiDPI
+// displays where the framebuffer is 2× the window size in each dimension (this avoids the set of molecules to be put in the bottom left corner of the window and the rest of the window to be empty). Updated in framebuffer_size_callback.
+int fbWidth  = SCR_WIDTH;
+int fbHeight = SCR_HEIGHT;
+
 glm::vec3 lightDirWorld   = glm::normalize(glm::vec3(0.5f, 1.0f, 0.3f));
 glm::vec3 lightColor      = glm::vec3(1.0f, 1.0f, 1.0f);
 float     ambientStrength = 0.15f;
@@ -139,9 +144,14 @@ int main() {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
-    // G-buffer at full window resolution (supersampling- not yet).
-     GBuffer gbuf;
-     gbuf.create(SCR_WIDTH, SCR_HEIGHT);
+
+    // Query the actual framebuffer size. On Retina/HiDPI displays this is
+    // larger than the window size (e.g. 1600x1200 for an 800x600 window).
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+
+    // G-buffer at full framebuffer resolution.
+    GBuffer gbuf;
+    gbuf.create(fbWidth, fbHeight);
     // Depth test needed so closer atoms draw in front of farther ones
     glEnable(GL_DEPTH_TEST);
 
@@ -158,46 +168,14 @@ int main() {
     bonds.build(molecule.Atoms);
     std::cout << "Found " << bonds.List.size() << " bonds." << std::endl;
 
-    // Calculate molecule's center (bounding center)
-    glm::vec3 boundingCenter = glm::vec3(0.0f);
-    for (const auto& atom : molecule.Atoms) {
-        boundingCenter += atom.Position;
-    }
-    boundingCenter /= static_cast<float>(molecule.Atoms.size());
-    
-    std::cout << "DEBUG: BoundingCenter BEFORE centering = (" << boundingCenter.x << ", " 
-              << boundingCenter.y << ", " << boundingCenter.z << ")\n";
-    
-    // Center atoms at origin
-    for (auto& atom : molecule.Atoms) {
-        atom.Position -= boundingCenter;
-    }
-    
-    // Verify centering worked
-    glm::vec3 verifyCenter = glm::vec3(0.0f);
-    for (const auto& atom : molecule.Atoms) {
-        verifyCenter += atom.Position;
-    }
-    verifyCenter /= static_cast<float>(molecule.Atoms.size());
-    
-    std::cout << "DEBUG: BoundingCenter AFTER centering = (" << verifyCenter.x << ", " 
-              << verifyCenter.y << ", " << verifyCenter.z << ")\n";
-    std::cout << "DEBUG: First atom position = (" << molecule.Atoms[0].Position.x << ", "
-              << molecule.Atoms[0].Position.y << ", " << molecule.Atoms[0].Position.z << ")\n";
-    // Now camera target can be at origin
-    camera.Target = glm::vec3(0.0f);
+    // PDB::load() already centres atoms at origin and computes BoundingRadius.
+    // Set up the orbit camera to frame the whole molecule.
+    camera.Target   = glm::vec3(0.0f);
     camera.Distance = molecule.BoundingRadius * 2.5f;
-    camera.Yaw = 0.0f;
-    camera.Pitch = glm::radians(20.0f);
-     // DEBUG
-    glm::vec3 camPos = camera.GetPosition();
-    std::cout << "DEBUG: Camera Target = (0, 0, 0)\n";
-    std::cout << "DEBUG: Camera Position = (" << camPos.x << ", " 
-              << camPos.y << ", " << camPos.z << ")\n";
-    std::cout << "DEBUG: Camera Distance = " << camera.Distance << "\n";
-    std::cout << "DEBUG: Camera Yaw = " << camera.Yaw << " rad\n";
-    std::cout << "DEBUG: Camera Pitch = " << camera.Pitch << " rad\n";
-        const glm::vec2 corners[4] = {
+    camera.Yaw      = 0.0f;
+    camera.Pitch    = glm::radians(20.0f);
+
+    const glm::vec2 corners[4] = {
         {-1.f, -1.f}, { 1.f, -1.f}, { 1.f,  1.f}, {-1.f,  1.f}
     };
 
@@ -205,10 +183,6 @@ int main() {
     std::vector<GLuint>         indices;
     vertices.reserve(molecule.Atoms.size() * 4);
     indices.reserve(molecule.Atoms.size() * 6);
-     std::cout << "DEBUG: First atom position (after centering): (" 
-              << molecule.Atoms[0].Position.x << ", "
-              << molecule.Atoms[0].Position.y << ", "
-              << molecule.Atoms[0].Position.z << ")\n";
     for (size_t i = 0; i < molecule.Atoms.size(); ++i) {
         const Atom& a     = molecule.Atoms[i];
         AtomStyle   style = PDB::getAtomStyle(a.Element);
@@ -259,7 +233,7 @@ int main() {
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        GLfloat aspect  = (GLfloat)SCR_WIDTH / (GLfloat)SCR_HEIGHT;
+        GLfloat aspect  = (GLfloat)fbWidth / (GLfloat)fbHeight;
         glm::mat4 view  = camera.GetViewMatrix();
         glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
         glm::mat4 model = glm::mat4(1.0f);
@@ -269,8 +243,6 @@ int main() {
         quadricShader.setMat4("uProj",    proj);
         quadricShader.setMat4("uModel",   model);
         quadricShader.setMat4("uInvProj", glm::inverse(proj));
-        quadricShader.setVec2("uViewport",
-            glm::vec2(float(gbuf.width), float(gbuf.height)));
 
         glBindVertexArray(impostorVAO);
         glDrawElements(GL_TRIANGLES,
@@ -282,7 +254,7 @@ int main() {
         // === LIGHTING PASS ===
        // Read the G-buffer, apply Phong, write to the default framebuffer.
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+        glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -335,6 +307,8 @@ return 0;
 
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+    fbWidth  = width;
+    fbHeight = height;
     glViewport(0, 0, width, height);
 }
 
@@ -356,8 +330,8 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
         firstMouse = false;
     }
 
-    GLfloat xoffset =  (xpos - lastX);
-    GLfloat yoffset =  (lastY - ypos); // inverted: screen-Y grows downward
+    GLfloat xoffset = -(xpos - lastX); // negate: drag-right → yaw decreases → molecule rotates right
+    GLfloat yoffset =  (ypos - lastY); // drag-down → pitch increases → camera rises → molecule dips
     lastX = xpos;
     lastY = ypos;
 
