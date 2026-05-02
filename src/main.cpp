@@ -36,11 +36,20 @@ float     ambientStrength = 0.15f;
 float     specStrength    = 0.5f;
 float     shininess       = 32.0f;
 
-struct ImpostorVertex {
-    glm::vec3 Center;
-    glm::vec2 Corner;
-    float     Radius;
-    glm::vec3 Color;
+// Per-instance data for sphere impostors (one entry per atom).
+// The 4 billboard corners are shared across all instances via a separate VBO.
+struct AtomInstance {
+    glm::vec3 Center; // world-space atom centre   (location 1, divisor=1)
+    float     Radius; // van der Waals radius       (location 2, divisor=1)
+    glm::vec3 Color;  // CPK colour                 (location 3, divisor=1)
+};
+
+// Per-instance data for cylinder impostors (one entry per bond).
+struct BondInstance {
+    glm::vec3 PosA;   // world-space position of atom A  (location 1, divisor=1)
+    glm::vec3 PosB;   // world-space position of atom B  (location 2, divisor=1)
+    float     Radius; // cylinder radius (Angstroms)     (location 3, divisor=1)
+    glm::vec3 Color;  // bond colour                     (location 4, divisor=1)
 };
 
 // G-buffer for deferred shading, storing diffuse colour, normal, and depth
@@ -175,44 +184,103 @@ int main() {
     camera.Yaw      = 0.0f;
     camera.Pitch    = glm::radians(20.0f);
 
-    const glm::vec2 corners[4] = {
-        {-1.f, -1.f}, { 1.f, -1.f}, { 1.f,  1.f}, {-1.f,  1.f}
+    // Shared billboard corners — a tiny quad template used by both sphere and
+    // cylinder VAOs. Ordered for GL_TRIANGLE_STRIP (no EBO needed).
+    static const glm::vec2 quadCorners[4] = {
+        {-1.f, -1.f}, { 1.f, -1.f}, {-1.f,  1.f}, { 1.f,  1.f}
     };
+    GLuint cornerVBO;
+    glGenBuffers(1, &cornerVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, cornerVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadCorners), quadCorners, GL_STATIC_DRAW);
 
-    std::vector<ImpostorVertex>vertices;
-    std::vector<GLuint>         indices;
-    vertices.reserve(molecule.Atoms.size() * 4);
-    indices.reserve(molecule.Atoms.size() * 6);
-    for (size_t i = 0; i < molecule.Atoms.size(); ++i) {
-        const Atom& a     = molecule.Atoms[i];
-        AtomStyle   style = PDB::getAtomStyle(a.Element);
-
-        for (int j = 0; j < 4; ++j)
-            vertices.push_back({a.Position, corners[j], style.Radius, style.Color});
-
-        GLuint base = static_cast<GLuint>(i * 4);
-        indices.insert(indices.end(), {base, base+1, base+2, base, base+2, base+3});
+    // Sphere impostor — instanced rendering.
+    // One AtomInstance per atom; the 4 corners above are reused for every atom.
+    // Attribute layout:   loc 0 = Corner (vec2, per-vertex)
+    //                     loc 1 = Center (vec3, per-instance)
+    //                     loc 2 = Radius (float, per-instance)
+    //                     loc 3 = Color  (vec3, per-instance)
+    std::vector<AtomInstance> atomInstances;
+    atomInstances.reserve(molecule.Atoms.size());
+    for (const Atom& a : molecule.Atoms) {
+        AtomStyle style = PDB::getAtomStyle(a.Element);
+        atomInstances.push_back({a.Position, style.Radius, style.Color});
     }
 
-    GLuint impostorVAO, impostorVBO, impostorEBO;
-    glGenVertexArrays(1, &impostorVAO);
-    glGenBuffers(1, &impostorVBO);
-    glGenBuffers(1, &impostorEBO);
+    GLuint sphereVAO, sphereInstanceVBO;
+    glGenVertexArrays(1, &sphereVAO);
+    glGenBuffers(1, &sphereInstanceVBO);
 
-    glBindVertexArray(impostorVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, impostorVBO);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(ImpostorVertex), vertices.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, impostorEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ImpostorVertex), (void*)offsetof(ImpostorVertex, Center));
+    glBindVertexArray(sphereVAO);
+    // loc 0: corner offset — per-vertex (divisor = 0, default)
+    glBindBuffer(GL_ARRAY_BUFFER, cornerVBO);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void*)0);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(ImpostorVertex), (void*)offsetof(ImpostorVertex, Corner));
+    // loc 1-3: atom data — per-instance (divisor = 1)
+    glBindBuffer(GL_ARRAY_BUFFER, sphereInstanceVBO);
+    glBufferData(GL_ARRAY_BUFFER,
+                 atomInstances.size() * sizeof(AtomInstance),
+                 atomInstances.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(AtomInstance), (void*)offsetof(AtomInstance, Center));
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(ImpostorVertex), (void*)offsetof(ImpostorVertex, Radius));
+    glVertexAttribDivisor(1, 1);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(AtomInstance), (void*)offsetof(AtomInstance, Radius));
     glEnableVertexAttribArray(2);
-    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(ImpostorVertex), (void*)offsetof(ImpostorVertex, Color));
+    glVertexAttribDivisor(2, 1);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(AtomInstance), (void*)offsetof(AtomInstance, Color));
     glEnableVertexAttribArray(3);
+    glVertexAttribDivisor(3, 1);
+    glBindVertexArray(0);
+
+    // -----------------------------------------------------------------------
+    // Cylinder impostor — instanced rendering.
+    // One BondInstance per bond; same corner template reused.
+    // Attribute layout:   loc 0 = Corner (vec2, per-vertex)
+    //                     loc 1 = PosA   (vec3, per-instance)
+    //                     loc 2 = PosB   (vec3, per-instance)
+    //                     loc 3 = Radius (float, per-instance)
+    //                     loc 4 = Color  (vec3, per-instance)
+    // -----------------------------------------------------------------------
+    const float BOND_RADIUS = 0.15f; // Angstroms — visual thickness of all bonds
+
+    std::vector<BondInstance> bondInstances;
+    bondInstances.reserve(bonds.List.size());
+    for (const Bond& bond : bonds.List) {
+        const Atom& a = molecule.Atoms[bond.A];
+        const Atom& b = molecule.Atoms[bond.B];
+        AtomStyle styleA = PDB::getAtomStyle(a.Element);
+        AtomStyle styleB = PDB::getAtomStyle(b.Element);
+        bondInstances.push_back({a.Position, b.Position,
+                                 BOND_RADIUS,
+                                 0.5f * (styleA.Color + styleB.Color)});
+    }
+
+    GLuint cylinderVAO, cylinderInstanceVBO;
+    glGenVertexArrays(1, &cylinderVAO);
+    glGenBuffers(1, &cylinderInstanceVBO);
+
+    glBindVertexArray(cylinderVAO);
+    // loc 0: corner offset — per-vertex
+    glBindBuffer(GL_ARRAY_BUFFER, cornerVBO);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void*)0);
+    glEnableVertexAttribArray(0);
+    // loc 1-4: bond data — per-instance
+    glBindBuffer(GL_ARRAY_BUFFER, cylinderInstanceVBO);
+    glBufferData(GL_ARRAY_BUFFER,
+                 bondInstances.size() * sizeof(BondInstance),
+                 bondInstances.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(BondInstance), (void*)offsetof(BondInstance, PosA));
+    glEnableVertexAttribArray(1);
+    glVertexAttribDivisor(1, 1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(BondInstance), (void*)offsetof(BondInstance, PosB));
+    glEnableVertexAttribArray(2);
+    glVertexAttribDivisor(2, 1);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(BondInstance), (void*)offsetof(BondInstance, Radius));
+    glEnableVertexAttribArray(3);
+    glVertexAttribDivisor(3, 1);
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(BondInstance), (void*)offsetof(BondInstance, Color));
+    glEnableVertexAttribArray(4);
+    glVertexAttribDivisor(4, 1);
     glBindVertexArray(0);
 
     Shader quadricShader("../shaders/quadric.vert", "../shaders/quadric.frag");
@@ -244,12 +312,21 @@ int main() {
         quadricShader.setMat4("uModel",   model);
         quadricShader.setMat4("uInvProj", glm::inverse(proj));
 
-        glBindVertexArray(impostorVAO);
-        glDrawElements(GL_TRIANGLES,
-               static_cast<GLsizei>(indices.size()),
-               GL_UNSIGNED_INT, 0);
+        glBindVertexArray(sphereVAO);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
+                              static_cast<GLsizei>(atomInstances.size()));
         glBindVertexArray(0);
 
+        // Cylinder draw call — uncomment once the cylinder shaders are ready.
+        // cylinderShader.use();
+        // cylinderShader.setMat4("uView",    view);
+        // cylinderShader.setMat4("uProj",    proj);
+        // cylinderShader.setMat4("uModel",   model);
+        // cylinderShader.setMat4("uInvProj", glm::inverse(proj));
+        // glBindVertexArray(cylinderVAO);
+        // glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
+        //                       static_cast<GLsizei>(bondInstances.size()));
+        // glBindVertexArray(0);
 
         // === LIGHTING PASS ===
        // Read the G-buffer, apply Phong, write to the default framebuffer.
@@ -297,9 +374,11 @@ int main() {
 }
         
 
-glDeleteVertexArrays(1, &impostorVAO);
-glDeleteBuffers(1, &impostorVBO);
-glDeleteBuffers(1, &impostorEBO);
+glDeleteVertexArrays(1, &sphereVAO);
+glDeleteVertexArrays(1, &cylinderVAO);
+glDeleteBuffers(1, &sphereInstanceVBO);
+glDeleteBuffers(1, &cylinderInstanceVBO);
+glDeleteBuffers(1, &cornerVBO);
 gbuf.destroy();
 glfwTerminate();
 return 0;

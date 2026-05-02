@@ -1,12 +1,19 @@
 /* Atom impostor pipeline (Sigg et al. 2006):
-   CPU     → 4 vertices per atom with billboard corner offsets
+   CPU     → 1 AtomInstance per atom + shared 4-corner quad template
    Vertex  → move centre to eye space, expand corners in screen plane
    Raster  → fills the quad with fragments
-   Fragment→ ray-sphere intersection, depth write, Phong shading */
+   Fragment→ ray-sphere intersection, depth write, G-buffer output
+
+   Instanced rendering: the 4 quad corners (location 0) are per-vertex;
+   atom data (locations 1-3) are per-instance (glVertexAttribDivisor = 1). */
 
 #version 410 core
-layout(location = 0) in vec3  aCenter; // atom centre in world space
-layout(location = 1) in vec2  aCorner; // billboard corner, in [-1, 1]
+
+// Per-vertex (divisor = 0): one of the 4 billboard corners in [-1, 1]²
+layout(location = 0) in vec2  aCorner;
+
+// Per-instance (divisor = 1): one atom
+layout(location = 1) in vec3  aCenter; // atom centre in world space
 layout(location = 2) in float aRadius; // van der Waals radius (Angstroms)
 layout(location = 3) in vec3  aColor;  // CPK colour
 
@@ -21,7 +28,7 @@ uniform mat4 uModel;
 
 void main() {
     // 1. Move atom centre from world space to eye space
-    vec4 eyeCenter = uView * vec4(aCenter, 1.0);
+    vec4 eyeCenter = uView * uModel * vec4(aCenter, 1.0);
 
     // 2. Pass centre and radius before expanding — fragment shader needs
     //    the original sphere centre, not the expanded corner position
