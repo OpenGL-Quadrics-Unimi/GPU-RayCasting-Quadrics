@@ -181,8 +181,8 @@ int main() {
     // Set up the orbit camera to frame the whole molecule.
     camera.Target   = glm::vec3(0.0f);
     camera.Distance = molecule.BoundingRadius * 2.5f;
-    camera.Yaw      = 0.0f;
-    camera.Pitch    = glm::radians(20.0f);
+    camera.Yaw   = glm::radians(45.0f);
+    camera.Pitch = glm::radians(30.0f);
 
     // Shared billboard corners — a tiny quad template used by both sphere and
     // cylinder VAOs. Ordered for GL_TRIANGLE_STRIP (no EBO needed).
@@ -284,6 +284,7 @@ int main() {
     glBindVertexArray(0);
 
     Shader quadricShader("../shaders/quadric.vert", "../shaders/quadric.frag");
+    Shader cylinderShader("../shaders/cylinder.vert", "../shaders/cylinder.frag");
 
     Shader lightingShader("../shaders/lighting.vert",
                           "../shaders/lighting.frag");
@@ -311,22 +312,23 @@ int main() {
         quadricShader.setMat4("uProj",    proj);
         quadricShader.setMat4("uModel",   model);
         quadricShader.setMat4("uInvProj", glm::inverse(proj));
+        quadricShader.setVec2("uViewport", glm::vec2(fbWidth, fbHeight));
 
         glBindVertexArray(sphereVAO);
         glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
                               static_cast<GLsizei>(atomInstances.size()));
         glBindVertexArray(0);
 
-        // Cylinder draw call — uncomment once the cylinder shaders are ready.
-        // cylinderShader.use();
-        // cylinderShader.setMat4("uView",    view);
-        // cylinderShader.setMat4("uProj",    proj);
-        // cylinderShader.setMat4("uModel",   model);
-        // cylinderShader.setMat4("uInvProj", glm::inverse(proj));
-        // glBindVertexArray(cylinderVAO);
-        // glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
-        //                       static_cast<GLsizei>(bondInstances.size()));
-        // glBindVertexArray(0);
+        cylinderShader.use();
+        cylinderShader.setMat4("uView",    view);
+        cylinderShader.setMat4("uProj",    proj);
+        cylinderShader.setMat4("uModel",   model);
+        cylinderShader.setMat4("uInvProj", glm::inverse(proj));
+        cylinderShader.setVec2("uViewport", glm::vec2(fbWidth, fbHeight));
+        glBindVertexArray(cylinderVAO);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
+                              static_cast<GLsizei>(bondInstances.size()));
+        glBindVertexArray(0);
 
         // === LIGHTING PASS ===
        // Read the G-buffer, apply Phong, write to the default framebuffer.
