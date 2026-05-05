@@ -283,8 +283,41 @@ int main() {
     glVertexAttribDivisor(4, 1);
     glBindVertexArray(0);
 
+    // -----------------------------------------------------------------------
+    // Ground plane — a flat quad rendered below the molecule.
+    // It writes into the same G-buffer as spheres and cylinders, so the
+    // lighting pass shades it automatically with the same Blinn-Phong model.
+    //
+    // Y position: one step below the bounding sphere's lowest point, so the
+    // ground is always visible no matter which molecule is loaded.
+    // Size: 4× the bounding radius — large enough to frame the molecule.
+    // -----------------------------------------------------------------------
+    float groundY        = -molecule.BoundingRadius - 0.5f;
+    float groundHalfSize =  molecule.BoundingRadius * 4.0f;
+
+    // Interleaved layout: position (vec3) | normal (vec3), ordered for GL_TRIANGLE_STRIP.
+    float groundVerts[] = {
+        -groundHalfSize, groundY, -groundHalfSize,   0.f, 1.f, 0.f,
+         groundHalfSize, groundY, -groundHalfSize,   0.f, 1.f, 0.f,
+        -groundHalfSize, groundY,  groundHalfSize,   0.f, 1.f, 0.f,
+         groundHalfSize, groundY,  groundHalfSize,   0.f, 1.f, 0.f,
+    };
+
+    GLuint groundVAO, groundVBO;
+    glGenVertexArrays(1, &groundVAO);
+    glGenBuffers(1, &groundVBO);
+    glBindVertexArray(groundVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, groundVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(groundVerts), groundVerts, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
     Shader quadricShader("../shaders/quadric.vert", "../shaders/quadric.frag");
     Shader cylinderShader("../shaders/cylinder.vert", "../shaders/cylinder.frag");
+    Shader groundShader("../shaders/ground.vert",   "../shaders/ground.frag");
 
     Shader lightingShader("../shaders/lighting.vert",
                           "../shaders/lighting.frag");
@@ -328,6 +361,16 @@ int main() {
         glBindVertexArray(cylinderVAO);
         glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
                               static_cast<GLsizei>(bondInstances.size()));
+        glBindVertexArray(0);
+
+        // Ground plane: rendered last in the geometry pass so atoms/bonds
+        // in front of it correctly occlude it via the depth buffer.
+        groundShader.use();
+        groundShader.setMat4("uView",  view);
+        groundShader.setMat4("uProj",  proj);
+        groundShader.setMat4("uModel", model);
+        glBindVertexArray(groundVAO);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
 
         // === LIGHTING PASS ===
@@ -378,9 +421,11 @@ int main() {
 
 glDeleteVertexArrays(1, &sphereVAO);
 glDeleteVertexArrays(1, &cylinderVAO);
+glDeleteVertexArrays(1, &groundVAO);
 glDeleteBuffers(1, &sphereInstanceVBO);
 glDeleteBuffers(1, &cylinderInstanceVBO);
 glDeleteBuffers(1, &cornerVBO);
+glDeleteBuffers(1, &groundVBO);
 gbuf.destroy();
 glfwTerminate();
 return 0;
