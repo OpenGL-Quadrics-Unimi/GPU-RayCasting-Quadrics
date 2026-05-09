@@ -27,7 +27,7 @@ void main()
 
     vec3  Q  = rO - vPosAEye;
     vec3  qc = Q  - dot(Q,  d) * d;   // component of Q perpendicular to axis
-    vec3  rc = rD - dot(rD, d) * d;   // component of rD perpendicular to axis
+    vec3  rc = rD - dot(rD, d) * d;   // "" rD ""
 
     float a    = dot(rc, rc);
     float b    = dot(qc, rc);

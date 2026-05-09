@@ -9,6 +9,9 @@
 #include "Geometry/Bonds.h"
 
 #include <iostream>
+#include <random>
+#include <cmath>
+#include <string>
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow *window);
@@ -25,8 +28,8 @@ GLfloat lastY          = SCR_HEIGHT / 2.0f;
 bool firstMouse        = true;
 bool leftButtonPressed = false;
 
-// Actual framebuffer size — differs from SCR_WIDTH/SCR_HEIGHT on Retina/HiDPI
-// displays where the framebuffer is 2× the window size in each dimension (this avoids the set of molecules to be put in the bottom left corner of the window and the rest of the window to be empty). Updated in framebuffer_size_callback.
+//Actual framebuffer size — differs from SCR_WIDTH/SCR_HEIGHT on Retina/HiDPI
+//displays where the framebuffer is 2× the window size in each dimension (this avoids the set of molecules to be put in the bottom left corner of the window and the rest of the window to be empty). Updated in framebuffer_size_callback.
 int fbWidth  = SCR_WIDTH;
 int fbHeight = SCR_HEIGHT;
 
@@ -36,8 +39,8 @@ float     ambientStrength = 0.15f;
 float     specStrength    = 0.5f;
 float     shininess       = 32.0f;
 
-// Per-instance data for sphere impostors (one entry per atom).
-// The 4 billboard corners are shared across all instances via a separate VBO.
+//Per-instance data for sphere impostors (one entry per atom)
+//The 4 billboard corners are shared across all instances via a separate VBO
 struct AtomInstance {
     glm::vec3 Center; // world-space atom centre   (location 1, divisor=1)
     float     Radius; // van der Waals radius       (location 2, divisor=1)
@@ -52,8 +55,8 @@ struct BondInstance {
     glm::vec3 Color;  // bond colour                     (location 4, divisor=1)
 };
 
-// G-buffer for deferred shading, storing diffuse colour, normal, and depth
-// Multiple Render Targets 
+//G-buffer for deferred shading, storing diffuse colour, normal, and depth
+//Multiple Render Targets 
 struct GBuffer {
     GLuint fbo        = 0;
     GLuint diffuseTex = 0, normalTex = 0, depthTex = 0;
@@ -84,9 +87,9 @@ struct GBuffer {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, diffuseTex, 0);
 
-        // Eye-space normals — must be GL_RGB16F because normals are signed floats in [-1,1].
-        // GL_RGB8 cannot represent negative values without manual encoding, which would
-        // cause visible banding in the lighting pass.
+        //Eye-space normals — must be GL_RGB16F because normals are signed floats in [-1,1]
+        //GL_RGB8 cannot represent negative values without manual encoding, which would
+        //cause visible banding in the lighting pass.
         glGenTextures(1, &normalTex);
         glBindTexture(GL_TEXTURE_2D, normalTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, w, h, 0,
@@ -98,7 +101,7 @@ struct GBuffer {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
                                GL_TEXTURE_2D, normalTex, 0);
 
-        // Depth;nearest filter — read exact depth values, not interpolated ones.
+        //Depth;nearest filter — read exact depth values, not interpolated ones
         glGenTextures(1, &depthTex);
         glBindTexture(GL_TEXTURE_2D, depthTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0,
@@ -110,7 +113,7 @@ struct GBuffer {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                                GL_TEXTURE_2D, depthTex, 0);
 
-        // Telling OpenGL we're writing two colour attachments simultaneously.
+        //Telling OpenGL we're writing two colour attachments simultaneously
         GLenum bufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
         glDrawBuffers(2, bufs);
 
@@ -120,8 +123,81 @@ struct GBuffer {
     }
 };
 
+//Single-channel R32F FBO for the raw SSAO occlusion values and the blur result
+struct SSAOBuffer {
+    GLuint fbo = 0;
+    GLuint tex = 0;
+
+    void destroy() {
+        if (tex) glDeleteTextures(1, &tex);
+        if (fbo) glDeleteFramebuffers(1, &fbo);
+        tex = fbo = 0;
+    }
+
+    void create(int w, int h) {
+        destroy();
+        glGenFramebuffers(1, &fbo);
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0,
+                     GL_RED, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, tex, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::cerr << "ERROR: SSAO FBO incomplete\n";
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+};
+
+//Depth-only FBO for shadow mapping
+//Uses a 2048×2048 GL_DEPTH_COMPONENT24 texture; border colour set to 1
+//so fragments outside the light frustum are never shadowed
+struct ShadowMap {
+    GLuint fbo      = 0;
+    GLuint depthTex = 0;
+    int    size     = 2048;
+
+    void destroy() {
+        if (depthTex) glDeleteTextures(1, &depthTex);
+        if (fbo)      glDeleteFramebuffers(1, &fbo);
+        depthTex = fbo = 0;
+    }
+
+    void create() {
+        destroy();
+        glGenFramebuffers(1, &fbo);
+
+        glGenTextures(1, &depthTex);
+        glBindTexture(GL_TEXTURE_2D, depthTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
+                     size, size, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        float border[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D, depthTex, 0);
+        //No colour output — explicitly tell OpenGL
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::cerr << "ERROR: shadow FBO incomplete\n";
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+};
+
 int main() {
-    // Initialize GLFW
+    //Initialize GLFW
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
@@ -130,7 +206,7 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    // Create window
+    //Create window
     GLFWwindow* window = glfwCreateWindow(800, 600, "Quadrics", NULL, NULL);
     if (window == NULL) {
         std::cout << "Failed to create GLFW window" << std::endl;
@@ -140,33 +216,75 @@ int main() {
     
 
     glfwMakeContextCurrent(window);
-    // Set callback function to adjust viewport when window is resized
+    //Set callback function to adjust viewport when window is resized
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetScrollCallback(window, scroll_callback);
 
-    // Initialize GLAD
+    //Initialize GLAD
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
 
-    // Query the actual framebuffer size. On Retina/HiDPI displays this is
-    // larger than the window size (e.g. 1600x1200 for an 800x600 window).
+    //Query the actual framebuffer size. On Retina/HiDPI displays this is
+    //larger than the window size (e.g. 1600x1200 for an 800x600 window)
     glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
 
-    // G-buffer at full framebuffer resolution.
+    //G-buffer at full framebuffer resolution.
     GBuffer gbuf;
     gbuf.create(fbWidth, fbHeight);
-    // Depth test needed so closer atoms draw in front of farther ones
+
+    //Shadow map-depth-only-2048*2048
+    ShadowMap shadowMap;
+    shadowMap.create();
+
+    //SSAO buffers-raw occlusion and blurred result-framebuffer resolution
+    SSAOBuffer ssaoBuf, ssaoBlurBuf;
+    ssaoBuf.create(fbWidth, fbHeight);
+    ssaoBlurBuf.create(fbWidth, fbHeight);
+
+    //Hemisphere kernel-16 samples in tangent space, biased toward the surface
+    std::uniform_real_distribution<float> randFloats(0.0f, 1.0f);
+    std::default_random_engine rng(42);
+    std::vector<glm::vec3> ssaoKernel;
+    ssaoKernel.reserve(16);
+    for (int i = 0; i < 16; ++i) {
+        glm::vec3 sample(randFloats(rng)*2.0f - 1.0f,
+                         randFloats(rng)*2.0f - 1.0f,
+                         randFloats(rng));
+        sample = glm::normalize(sample) * randFloats(rng);
+        //interpolation-put more samples close to origin
+        float scale = float(i) / 16.0f;
+        scale = 0.1f + 0.9f * scale * scale;
+        ssaoKernel.push_back(sample * scale);
+    }
+
+    //4×4 noise texture-random rotations around the Z axis to break banding
+    std::vector<glm::vec3> ssaoNoise;
+    ssaoNoise.reserve(16);
+    for (int i = 0; i < 16; ++i)
+        ssaoNoise.push_back(glm::vec3(randFloats(rng)*2.0f - 1.0f,
+                                      randFloats(rng)*2.0f - 1.0f,
+                                      0.0f));
+    GLuint noiseTex;
+    glGenTextures(1, &noiseTex);
+    glBindTexture(GL_TEXTURE_2D, noiseTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, 4, 4, 0,
+                 GL_RGB, GL_FLOAT, ssaoNoise.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    //Depth test-closer atoms draw in front of farther ones
     glEnable(GL_DEPTH_TEST);
 
-    // Load molecule from PDB file and set camera distance:
-    // camera distance is set from the bounding radius
-    // so the whole molecule always fits in view
+    //Load molecule from PDB file
+    //camera distance is set from the bounding r so the whole molecule always fits in view
     PDB molecule;
     if (!molecule.load("../data/1crn.pdb"))
         std::cerr << "ERROR: could not load PDB file" << std::endl;
@@ -177,15 +295,15 @@ int main() {
     bonds.build(molecule.Atoms);
     std::cout << "Found " << bonds.List.size() << " bonds." << std::endl;
 
-    // PDB::load() already centres atoms at origin and computes BoundingRadius.
-    // Set up the orbit camera to frame the whole molecule.
+    //PDB::load()-centres atoms at origin and computes BoundingRadius
+    //orbit camera-frame the whole molecule
     camera.Target   = glm::vec3(0.0f);
     camera.Distance = molecule.BoundingRadius * 2.5f;
     camera.Yaw   = glm::radians(45.0f);
     camera.Pitch = glm::radians(30.0f);
 
-    // Shared billboard corners — a tiny quad template used by both sphere and
-    // cylinder VAOs. Ordered for GL_TRIANGLE_STRIP (no EBO needed).
+    //Shared billboard quad used for both sphere and cylinder
+    //Rendered with GL_TRIANGLE_STRIP, so no EBO is needed
     static const glm::vec2 quadCorners[4] = {
         {-1.f, -1.f}, { 1.f, -1.f}, {-1.f,  1.f}, { 1.f,  1.f}
     };
@@ -194,12 +312,13 @@ int main() {
     glBindBuffer(GL_ARRAY_BUFFER, cornerVBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(quadCorners), quadCorners, GL_STATIC_DRAW);
 
-    // Sphere impostor — instanced rendering.
-    // One AtomInstance per atom; the 4 corners above are reused for every atom.
-    // Attribute layout:   loc 0 = Corner (vec2, per-vertex)
-    //                     loc 1 = Center (vec3, per-instance)
-    //                     loc 2 = Radius (float, per-instance)
-    //                     loc 3 = Color  (vec3, per-instance)
+    //Sphere impostor — instanced rendering
+    //Each atom has an AtomInstance; the same 4 corners are reused for all atoms
+    //Attribute layout:
+    //loc 0 = Corner (vec2, per-vertex)
+    //loc 1 = Center (vec3, per-instance)
+    //loc 2 = Radius (float, per-instance)
+    //loc 3 = Color (vec3, per-instance)
     std::vector<AtomInstance> atomInstances;
     atomInstances.reserve(molecule.Atoms.size());
     for (const Atom& a : molecule.Atoms) {
@@ -212,11 +331,11 @@ int main() {
     glGenBuffers(1, &sphereInstanceVBO);
 
     glBindVertexArray(sphereVAO);
-    // loc 0: corner offset — per-vertex (divisor = 0, default)
+    //loc 0:corner offset — per-vertex-divisor=0
     glBindBuffer(GL_ARRAY_BUFFER, cornerVBO);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void*)0);
     glEnableVertexAttribArray(0);
-    // loc 1-3: atom data — per-instance (divisor = 1)
+    //loc 1-3:atom data — per-instance-divisor=1
     glBindBuffer(GL_ARRAY_BUFFER, sphereInstanceVBO);
     glBufferData(GL_ARRAY_BUFFER,
                  atomInstances.size() * sizeof(AtomInstance),
@@ -232,16 +351,12 @@ int main() {
     glVertexAttribDivisor(3, 1);
     glBindVertexArray(0);
 
-    // -----------------------------------------------------------------------
-    // Cylinder impostor — instanced rendering.
-    // One BondInstance per bond; same corner template reused.
-    // Attribute layout:   loc 0 = Corner (vec2, per-vertex)
-    //                     loc 1 = PosA   (vec3, per-instance)
-    //                     loc 2 = PosB   (vec3, per-instance)
-    //                     loc 3 = Radius (float, per-instance)
-    //                     loc 4 = Color  (vec3, per-instance)
-    // -----------------------------------------------------------------------
-    const float BOND_RADIUS = 0.15f; // Angstroms — visual thickness of all bonds
+
+    //Bonds are drawn as cylinders
+    //Each bond uses a BondInstance, but corners are reused
+    //loc 0=corner, others = position,r,color
+    //BOND_RADIUS-thickness
+    const float BOND_RADIUS = 0.15f; 
 
     std::vector<BondInstance> bondInstances;
     bondInstances.reserve(bonds.List.size());
@@ -260,11 +375,11 @@ int main() {
     glGenBuffers(1, &cylinderInstanceVBO);
 
     glBindVertexArray(cylinderVAO);
-    // loc 0: corner offset — per-vertex
+    //loc 0: corner offset — per-vertex
     glBindBuffer(GL_ARRAY_BUFFER, cornerVBO);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void*)0);
     glEnableVertexAttribArray(0);
-    // loc 1-4: bond data — per-instance
+    //loc 1-4: bond data — per-instance
     glBindBuffer(GL_ARRAY_BUFFER, cylinderInstanceVBO);
     glBufferData(GL_ARRAY_BUFFER,
                  bondInstances.size() * sizeof(BondInstance),
@@ -283,19 +398,15 @@ int main() {
     glVertexAttribDivisor(4, 1);
     glBindVertexArray(0);
 
-    // -----------------------------------------------------------------------
-    // Ground plane — a flat quad rendered below the molecule.
-    // It writes into the same G-buffer as spheres and cylinders, so the
-    // lighting pass shades it automatically with the same Blinn-Phong model.
-    //
-    // Y position: one step below the bounding sphere's lowest point, so the
-    // ground is always visible no matter which molecule is loaded.
-    // Size: 4× the bounding radius — large enough to frame the molecule.
-    // -----------------------------------------------------------------------
+    //Ground plane: flat surface below the molecule
+    //Writes to the same G-buffer, so it uses the same lighting as other objects
+    //Y-slightly below the bounding sphere-always visible
+    //Size-4r so frames the molecule
     float groundY        = -molecule.BoundingRadius - 0.5f;
     float groundHalfSize =  molecule.BoundingRadius * 4.0f;
 
-    // Interleaved layout: position (vec3) | normal (vec3), ordered for GL_TRIANGLE_STRIP.
+    //Interleaved layout-position (vec3)|normal (vec3)
+    //Ordered for GL_TRIANGLE_STRIP
     float groundVerts[] = {
         -groundHalfSize, groundY, -groundHalfSize,   0.f, 1.f, 0.f,
          groundHalfSize, groundY, -groundHalfSize,   0.f, 1.f, 0.f,
@@ -314,22 +425,91 @@ int main() {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
-
     Shader quadricShader("../shaders/quadric.vert", "../shaders/quadric.frag");
     Shader cylinderShader("../shaders/cylinder.vert", "../shaders/cylinder.frag");
     Shader groundShader("../shaders/ground.vert",   "../shaders/ground.frag");
+
+    //Shadow-pass shaders — sphere and cylinder use special fragment shaders
+    // fragments outside the silhouette are discarded
+    Shader shadowSphereShader("../shaders/shadowsphere.vert",   "../shaders/shadowsphere.frag");
+    Shader shadowCylShader   ("../shaders/shadowcylinder.vert", "../shaders/shadowcylinder.frag");
+    Shader shadowGroundShader("../shaders/shadowground.vert",   "../shaders/shadow.frag");
+
+    //SSAO and blur passes same fullscreen-quad vertex shader
+    Shader ssaoShader    ("../shaders/lighting.vert", "../shaders/ssao.frag");
+    Shader ssaoBlurShader("../shaders/lighting.vert", "../shaders/ssaoblur.frag");
 
     Shader lightingShader("../shaders/lighting.vert",
                           "../shaders/lighting.frag");
 
     Renderer screenQuad;
     screenQuad.initQuad();
-    // Render loop
+    //Render loop
     while (!glfwWindowShouldClose(window)) {
         processInput(window);
 
-        //I rendered spheres into the G-buffer using ray tracing: the geometry pass is now complete. 
-        //The screen will remain black until the lighting pass reads the G-buffer and produces the final output.
+        //Depth map from light's perspective (for shadow map)
+        //Used in lighting pass
+        //Frustum is set to cover the molecule
+        float orthoSize = molecule.BoundingRadius * 1.5f;
+        //light source far enough to see the whole scene
+        glm::vec3 lightPos = lightDirWorld * (molecule.BoundingRadius * 3.0f);
+        glm::mat4 lightProj = glm::ortho(-orthoSize, orthoSize,
+                                         -orthoSize, orthoSize,
+                                          0.1f, molecule.BoundingRadius * 8.0f);
+        glm::mat4 lightView = glm::lookAt(lightPos,
+                                          glm::vec3(0.0f),
+                                          glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 lightSpaceMatrix = lightProj * lightView;
+
+        //Build two vectors perpendicular to the light direction
+        //Used for the shadow billboard plane
+        glm::vec3 lightDir  = glm::normalize(lightDirWorld);
+        glm::vec3 upGuess   = (glm::abs(glm::dot(lightDir, glm::vec3(0,1,0))) > 0.99f)
+                              ? glm::vec3(1,0,0) : glm::vec3(0,1,0);
+        glm::vec3 shadowRight = glm::normalize(glm::cross(upGuess, lightDir));
+        glm::vec3 shadowUp    = glm::cross(lightDir, shadowRight);
+
+        glm::mat4 model = glm::mat4(1.0f);   // shared identity model for all geometry
+
+        glBindFramebuffer(GL_FRAMEBUFFER, shadowMap.fbo);
+        glViewport(0, 0, shadowMap.size, shadowMap.size);
+        glClear(GL_DEPTH_BUFFER_BIT);
+
+        //Spheres
+        shadowSphereShader.use();
+        shadowSphereShader.setMat4("uLightSpaceMatrix", lightSpaceMatrix);
+        shadowSphereShader.setMat4("uModel",            model);
+        shadowSphereShader.setVec3("uShadowRight",      shadowRight);
+        shadowSphereShader.setVec3("uShadowUp",         shadowUp);
+        glBindVertexArray(sphereVAO);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
+                              static_cast<GLsizei>(atomInstances.size()));
+
+        //Cylinders
+        shadowCylShader.use();
+        shadowCylShader.setMat4("uLightSpaceMatrix", lightSpaceMatrix);
+        shadowCylShader.setMat4("uModel",            model);
+        shadowCylShader.setVec3("uShadowRight",      shadowRight);
+        shadowCylShader.setVec3("uShadowUp",         shadowUp);
+        shadowCylShader.setVec2("uShadowMapSize",
+                                glm::vec2((float)shadowMap.size, (float)shadowMap.size));
+        glBindVertexArray(cylinderVAO);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
+                              static_cast<GLsizei>(bondInstances.size()));
+
+        //Ground plane
+        shadowGroundShader.use();
+        shadowGroundShader.setMat4("uLightSpaceMatrix", lightSpaceMatrix);
+        shadowGroundShader.setMat4("uModel",            model);
+        glBindVertexArray(groundVAO);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        glBindVertexArray(0);
+
+        //GEOMETRY PASS
+        //Spheres rendered into the G-buffer-ray tracing
+        //Screen stays black until lighting pass
         glBindFramebuffer(GL_FRAMEBUFFER, gbuf.fbo);
         glViewport(0, 0, gbuf.width, gbuf.height);
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -338,7 +518,7 @@ int main() {
         GLfloat aspect  = (GLfloat)fbWidth / (GLfloat)fbHeight;
         glm::mat4 view  = camera.GetViewMatrix();
         glm::mat4 proj  = camera.GetProjectionMatrix(aspect);
-        glm::mat4 model = glm::mat4(1.0f);
+        //model is declared above in the shadow pass-identity matrix
 
         quadricShader.use();
         quadricShader.setMat4("uView",    view);
@@ -352,6 +532,7 @@ int main() {
                               static_cast<GLsizei>(atomInstances.size()));
         glBindVertexArray(0);
 
+        //Render bond cylinders
         cylinderShader.use();
         cylinderShader.setMat4("uView",    view);
         cylinderShader.setMat4("uProj",    proj);
@@ -363,8 +544,8 @@ int main() {
                               static_cast<GLsizei>(bondInstances.size()));
         glBindVertexArray(0);
 
-        // Ground plane: rendered last in the geometry pass so atoms/bonds
-        // in front of it correctly occlude it via the depth buffer.
+        //Ground is rendered last
+        //Atoms occlude it via depth buffer
         groundShader.use();
         groundShader.setMat4("uView",  view);
         groundShader.setMat4("uProj",  proj);
@@ -373,35 +554,82 @@ int main() {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
 
-        // === LIGHTING PASS ===
-       // Read the G-buffer, apply Phong, write to the default framebuffer.
+        //SSAO PASS 
+        //Compute per-fragment ambient occlusion into ssaoBuf-R32F
+        glBindFramebuffer(GL_FRAMEBUFFER, ssaoBuf.fbo);
+        glViewport(0, 0, fbWidth, fbHeight);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_DEPTH_TEST);
+
+        ssaoShader.use();
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, gbuf.normalTex);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, gbuf.depthTex);
+        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, noiseTex);
+        ssaoShader.setInt("gNormal",   0);
+        ssaoShader.setInt("gDepth",    1);
+        ssaoShader.setInt("uNoiseTex", 2);
+        ssaoShader.setVec2("uNoiseScale",
+                           glm::vec2(float(fbWidth) / 4.0f, float(fbHeight) / 4.0f));
+        ssaoShader.setMat4("uProj",    proj);
+        ssaoShader.setMat4("uInvProj", glm::inverse(proj));
+        ssaoShader.setFloat("uRadius", 1.0f);
+        for (int i = 0; i < 16; ++i)
+            ssaoShader.setVec3("uKernel[" + std::to_string(i) + "]", ssaoKernel[i]);
+        screenQuad.drawQuad();
+        glEnable(GL_DEPTH_TEST);
+
+        //SSAO BLUR PASS
+        //Box-blur the raw occlusion to remove high-frequency noise
+        glBindFramebuffer(GL_FRAMEBUFFER, ssaoBlurBuf.fbo);
+        glViewport(0, 0, fbWidth, fbHeight);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_DEPTH_TEST);
+
+        ssaoBlurShader.use();
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, ssaoBuf.tex);
+        ssaoBlurShader.setInt("uSSAO", 0);
+        screenQuad.drawQuad();
+        glEnable(GL_DEPTH_TEST);
+
+        //LIGHTING PASS
+       //Read the G-buffer, apply Phong, write to the default framebuffer
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // The fullscreen quad covers everything; depth test would just reject it
-        // because the default-FB depth was cleared to 1.0.
+        // Fullscreen quad covers the whole screen
+        // Depth test rejects fragments-depth = 1
         glDisable(GL_DEPTH_TEST);
 
         lightingShader.use();
 
-        // Bind G-buffer textures to units 0/1/2
+        //Bind G-buffer textures to units 0/1/2
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, gbuf.diffuseTex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, gbuf.normalTex);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, gbuf.depthTex);
+        //Shadow map on unit 3
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, shadowMap.depthTex);
+        //Blurred SSAO on unit 4
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, ssaoBlurBuf.tex);
 
-        lightingShader.setInt("gDiffuse", 0);
-        lightingShader.setInt("gNormal",  1);
-        lightingShader.setInt("gDepth",   2);
+        lightingShader.setInt("gDiffuse",    0);
+        lightingShader.setInt("gNormal",     1);
+        lightingShader.setInt("gDepth",      2);
+        lightingShader.setInt("uShadowMap",  3);
+        lightingShader.setInt("uSSAOTex",    4);
 
-        // Position is reconstructed from depth — needs the same proj as geom pass
-        lightingShader.setMat4("uInvProj", glm::inverse(proj));
+        //Position is reconstructed from depth — needs the same proj as geo pass
+        lightingShader.setMat4("uInvProj",          glm::inverse(proj));
+        lightingShader.setMat4("uInvView",          glm::inverse(view));
+        lightingShader.setMat4("uLightSpaceMatrix", lightSpaceMatrix);
 
-        // World-space light -> eye space (rotation only for a directional light)
+        //Light:world → view space (rotation only)
         glm::vec3 lightDirEye = glm::normalize(glm::mat3(view) * lightDirWorld);
         lightingShader.setVec3 ("uLightDirEye",  lightDirEye);
         lightingShader.setVec3 ("uLightColor",   lightColor);
@@ -411,7 +639,7 @@ int main() {
 
         screenQuad.drawQuad();
 
-        // Restore depth testing for the next frame's geometry pass
+        //Depth test re-enabled
         glEnable(GL_DEPTH_TEST);
 
         glfwSwapBuffers(window);
@@ -427,6 +655,10 @@ glDeleteBuffers(1, &cylinderInstanceVBO);
 glDeleteBuffers(1, &cornerVBO);
 glDeleteBuffers(1, &groundVBO);
 gbuf.destroy();
+shadowMap.destroy();
+ssaoBuf.destroy();
+ssaoBlurBuf.destroy();
+glDeleteTextures(1, &noiseTex);
 glfwTerminate();
 return 0;
 }

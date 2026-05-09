@@ -4,19 +4,55 @@ in  vec2 TexCoord;
 out vec4 FragColor;
 
 // G-buffer
-uniform sampler2D gDiffuse;   
-uniform sampler2D gNormal;    
-uniform sampler2D gDepth;    
+uniform sampler2D gDiffuse;
+uniform sampler2D gNormal;
+uniform sampler2D gDepth;
 
 //reconstruction
-uniform mat4 uInvProj;// NDC 
+uniform mat4 uInvProj;// NDC
+uniform mat4 uInvView; // eye space -> world space
 
 //Light config
-uniform vec3  uLightDirEye;   
+uniform vec3  uLightDirEye;
 uniform vec3  uLightColor;
 uniform float uAmbient;
 uniform float uSpecStrength;
 uniform float uShininess;
+
+// Shadow map (commit 24)
+uniform sampler2D uShadowMap;
+uniform mat4      uLightSpaceMatrix;
+
+// Blurred SSAO occlusion (commit 26)
+uniform sampler2D uSSAOTex;
+
+// PCF: sample a 3×3 neighbourhood of the shadow map.
+// Returns a value in [0,1]; 0 = fully in shadow, 1 = fully lit.
+// A small bias prevents shadow acne caused by depth-map precision limits.
+float shadowFactor(vec4 lightSpacePos)
+{
+    // Perspective divide → NDC, then remap to [0,1] for texture lookup.
+    vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
+    proj = proj * 0.5 + 0.5;
+
+    // Outside the light frustum: treat as lit (border colour is white = 1.0).
+    if (proj.z > 1.0) return 1.0;
+
+    float currentDepth = proj.z;
+    float bias         = 0.005;
+
+    // 3×3 PCF kernel — average 9 depth comparisons to soften shadow edges.
+    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
+    float shadow = 0.0;
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            float pcfDepth = texture(uShadowMap,
+                                     proj.xy + vec2(x, y) * texelSize).r;
+            shadow += (currentDepth - bias > pcfDepth) ? 0.0 : 1.0;
+        }
+    }
+    return shadow / 9.0;
+}
 
 void main()
 {
@@ -36,14 +72,20 @@ void main()
 
     vec3 albedo = texture(gDiffuse, TexCoord).rgb;
 
+    // Reconstruct world-space position for shadow map lookup.
+    vec4 worldPos4    = uInvView * vec4(fragPos, 1.0);
+    vec4 lightSpacePos = uLightSpaceMatrix * worldPos4;
+    float shadow      = shadowFactor(lightSpacePos);
+
     // Blinn-Phong
     vec3 L = normalize(uLightDirEye);
     vec3 V = normalize(-fragPos);
     vec3 H = normalize(L + V);
 
+    float ao      = max(texture(uSSAOTex, TexCoord).r, 0.4);
     vec3 ambient  = uAmbient * albedo;
-    vec3 diffuse  = max(dot(N, L), 0.0) * albedo * uLightColor;
-    vec3 specular = pow(max(dot(N, H), 0.0), uShininess)
+    vec3 diffuse  = shadow * max(dot(N, L), 0.0) * albedo * uLightColor;
+    vec3 specular = shadow * pow(max(dot(N, H), 0.0), uShininess)
                     * uSpecStrength * uLightColor;
 
     FragColor = vec4(ambient + diffuse + specular, 1.0);
