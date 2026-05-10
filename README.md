@@ -19,7 +19,7 @@ Atoms are rendered as mathematically exact spheres and bonds as cylinders, both 
 |---|---|
 | ![First light pass](screenshots/quadric_first_light_pass.png) | ![Shadows and SSAO](screenshots/quadric_light_and_shadows.png) |
 
-![ImGui control panel](screenshots/first_imgui_menu.png)
+![ImGui control panel](screenshots/full_pipeline.png)
 
 ---
 
