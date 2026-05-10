@@ -20,7 +20,7 @@ void main()
     vCorner = aCorner;
 
     // Build a billboard in world space perpendicular to the light direction.
-    // Displacing each corner by ±radius along the two light-perpendicular axes
+    // Displacing each corner by +/-radius along the two light-perpendicular axes
     // guarantees the billboard always covers the sphere's silhouette from the
     // light's point of view, regardless of its orientation.
     vec3 worldCenter = (uModel * vec4(aCenter, 1.0)).xyz;

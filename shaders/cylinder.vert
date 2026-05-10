@@ -53,7 +53,7 @@ void main()
 
     float x_ndc, y_ndc;
 
-    // X extents — depends on the lateral x and the depth z of each endpoint
+    // X extents (depends on the lateral x and the depth z of each endpoint)
     float QxA = eyeA.x*eyeA.x + eyeA.z*eyeA.z - r*r;
     float QxB = eyeB.x*eyeB.x + eyeB.z*eyeB.z - r*r;
     if (QxA > 0.0 && QxB > 0.0) {
@@ -70,7 +70,7 @@ void main()
         x_ndc = aCorner.x; // camera inside one cap sphere: cover full screen width
     }
 
-    // Y extents — depends on the lateral y and the depth z of each endpoint
+    // Y extents (depends on the lateral y and the depth z of each endpoint)
     float QyA = eyeA.y*eyeA.y + eyeA.z*eyeA.z - r*r;
     float QyB = eyeB.y*eyeB.y + eyeB.z*eyeB.z - r*r;
     if (QyA > 0.0 && QyB > 0.0) {
