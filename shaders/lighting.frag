@@ -83,7 +83,7 @@ void main()
     vec3 H = normalize(L + V);
 
     float ao      = max(texture(uSSAOTex, TexCoord).r, 0.4);
-    vec3 ambient  = uAmbient * albedo;
+    vec3 ambient  = uAmbient * albedo * ao;
     vec3 diffuse  = shadow * max(dot(N, L), 0.0) * albedo * uLightColor;
     vec3 specular = shadow * pow(max(dot(N, H), 0.0), uShininess)
                     * uSpecStrength * uLightColor;
