@@ -1,6 +1,6 @@
 # GPU Ray-Casting of Quadric Surfaces
 
-Real-time molecular visualiser built as a teaching artifact for the *Real-time Graphics Programming* course at **Università degli Studi di Milano**.
+Real-time molecular visualiser built for the *Real-time Graphics Programming* course at **Università degli Studi di Milano**.
 
 The renderer implements the method described in:
 
