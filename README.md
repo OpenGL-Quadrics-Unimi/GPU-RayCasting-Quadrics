@@ -17,7 +17,9 @@ Atoms are rendered as mathematically exact spheres and bonds as cylinders, both 
 
 | Deferred lighting pass | Full pipeline |
 |---|---|
-| ![First light pass](report/screenshot/quadric_first_light_pass.png) | ![Shadows and SSAO](report/screenshot/quadric_light_and_shadows.png) |
+| ![First light pass](screenshots/quadric_first_light_pass.png) | ![Shadows and SSAO](screenshots/quadric_light_and_shadows.png) |
+
+![ImGui control panel](screenshots/first_imgui_menu.png)
 
 ---
 
@@ -45,7 +47,7 @@ Atoms are rendered as mathematically exact spheres and bonds as cylinders, both 
 brew install cmake glfw glm
 ```
 
-GLAD is vendored in `external/glad/`. ImGui is vendored in `external/imgui/`. No other external dependencies are needed.
+> **No other installs needed.** [GLAD](https://glad.dav1d.de/) and [Dear ImGui](https://github.com/ocornut/imgui) are both vendored inside the repository (`external/glad/` and `external/imgui/`) and compiled automatically by CMake.
 
 ---
 
