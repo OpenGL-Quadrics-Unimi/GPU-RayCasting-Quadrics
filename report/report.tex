@@ -1,0 +1,596 @@
+\documentclass[12pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{parskip}
+
+% Code listing style
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codecomment}{RGB}{100,100,100}
+\definecolor{codekeyword}{RGB}{0,0,180}
+\definecolor{codestring}{RGB}{150,0,0}
+
+\lstdefinestyle{cppstyle}{
+    backgroundcolor=\color{codebg},
+    commentstyle=\color{codecomment}\itshape,
+    keywordstyle=\color{codekeyword}\bfseries,
+    stringstyle=\color{codestring},
+    basicstyle=\ttfamily\small,
+    breakatwhitespace=false,
+    breaklines=true,
+    keepspaces=true,
+    numbers=left,
+    numbersep=8pt,
+    numberstyle=\tiny\color{gray},
+    showspaces=false,
+    showstringspaces=false,
+    tabsize=4,
+    language=C++,
+    frame=single,
+    framesep=4pt,
+    xleftmargin=12pt
+}
+
+\lstdefinestyle{glslstyle}{
+    backgroundcolor=\color{codebg},
+    commentstyle=\color{codecomment}\itshape,
+    keywordstyle=\color{codekeyword}\bfseries,
+    stringstyle=\color{codestring},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    numbers=left,
+    numbersep=8pt,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    framesep=4pt,
+    xleftmargin=12pt,
+    morekeywords={vec2, vec3, vec4, mat4, uniform, in, out, layout,
+                  location, version, core, discard, normalize, dot,
+                  sqrt, max, pow, texture, sampler2D}
+}
+
+\title{
+    \textbf{GPU Ray-Casting of Quadric Surfaces} \\
+    \large Implementation Report — Real-time Graphics Programming \\
+    \large Università degli Studi di Milano
+}
+\author{Giorgia Carboni \and Betul Gul}
+\date{Academic Year 2025--2026}
+
+% -------------------------------------------------------------------------
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% =========================================================================
+\section{Introduction}
+% =========================================================================
+
+Molecular visualisation is a fundamental tool in structural biology and drug design. A common task is to display large protein molecules interactively, with correct shading and depth. Traditional polygon-based approaches (for example, rendering each atom as a sphere made of triangles) become slow when a molecule contains thousands of atoms, because the number of triangles grows quickly.
+
+This report describes our incremental implementation of the method proposed by Sigg et al.~\cite{sigg2006}, \textit{GPU-Based Ray-Casting of Quadratic Surfaces}. The method represents atoms and bonds as mathematical surfaces (quadrics) and computes their appearance entirely on the GPU through ray-casting. This avoids the cost of polygon tessellation and produces pixel-perfect silhouettes and normals at any zoom level.
+
+The project is written in C++17 using OpenGL~4.1, GLFW, GLAD, and GLM. It targets macOS compatibility (OpenGL 4.1 core profile). The implementation was built incrementally over 29 commits, each introducing one new feature, so the git history can serve as a step-by-step guide for students learning the same pipeline.
+
+% =========================================================================
+\section{Background}
+% =========================================================================
+
+\subsection{Quadric Surfaces}
+
+A quadric surface is a second-degree algebraic surface. In homogeneous coordinates, it is defined by a $4 \times 4$ symmetric matrix $\mathbf{Q}$:
+\begin{equation}
+    \mathbf{p}^T \mathbf{Q} \, \mathbf{p} = 0
+    \label{eq:quadric}
+\end{equation}
+where $\mathbf{p} = (x, y, z, 1)^T$ is a point on the surface. A sphere of radius $r$ centred at the origin corresponds to the diagonal matrix $\mathbf{Q} = \mathrm{diag}(1, 1, 1, -r^2)$.
+
+\subsection{Ray-Quadric Intersection}
+
+To find where a ray $\mathbf{r}(t) = \mathbf{o} + t\,\mathbf{d}$ hits the surface, we substitute into Equation~\ref{eq:quadric}:
+\begin{equation}
+    t^2 (\mathbf{d}^T \mathbf{Q} \mathbf{d})
+    + 2t (\mathbf{o}^T \mathbf{Q} \mathbf{d})
+    + \mathbf{o}^T \mathbf{Q} \mathbf{o} = 0
+    \label{eq:rayquadric}
+\end{equation}
+This is a standard quadratic equation in $t$. If the discriminant is negative, the ray misses the surface.
+
+In our implementation we solve Equation~\ref{eq:rayquadric} directly in eye space for spheres, rather than using the parameter-space transformation described in~\cite{sigg2006}. The parameter-space approach becomes numerically unstable under perspective at zoom-out, because the matrix inversion used in the transformation becomes ill-conditioned. Eye-space intersection avoids this problem and is mathematically equivalent for spheres.
+
+\subsection{Impostor Technique}
+
+Instead of sending one vertex per atom to the GPU, we generate a flat screen-facing quadrilateral (a \emph{billboard} or \emph{impostor}) around each atom centre. The fragment shader then performs the ray-sphere intersection for each pixel covered by the quad. Pixels that miss the sphere are discarded with \texttt{discard}; pixels that hit the sphere receive the correct colour and depth. This produces a geometrically exact sphere with no tessellation artefacts.
+
+\subsection{Deferred Shading}
+
+Deferred shading separates geometry processing from lighting. In the \emph{geometry pass}, the fragment shader writes surface properties (colour, normal, depth) into a set of textures called the \emph{G-buffer}. In the \emph{lighting pass}, a fullscreen quad reads those textures and computes the final colour. This structure allows complex lighting to be computed once per screen pixel, regardless of how many objects overlap.
+
+% =========================================================================
+\section{Project Architecture}
+% =========================================================================
+
+The project follows the directory structure below.
+
+\begin{verbatim}
+include/Core/      Shader.h, Camera.h, Renderer.h
+include/Geometry/  PDB.h, Bonds.h, Quadric.h
+src/               main.cpp, Core/, Geometry/
+shaders/           quadric, cylinder, ground, lighting,
+                   ssao, ssaoblur, composite, shadow*
+external/          glad/ (OpenGL loader), imgui/ (Dear ImGui)
+data/              11 PDB structures (RCSB Protein Data Bank)
+\end{verbatim}
+
+Each frame runs five GPU passes in sequence: shadow pass $\to$ geometry pass $\to$ SSAO pass $\to$ lighting pass $\to$ composite pass.
+
+% =========================================================================
+\section{Implementation}
+% =========================================================================
+
+\subsection{Phase 1 — Foundations}
+
+\subsubsection{Camera}
+
+The \texttt{Camera} class implements an orbit camera parametrised by yaw angle $\phi$, pitch angle $\theta$, and distance $d$ from a target point. The camera position in world space is:
+\begin{equation}
+    \mathbf{pos} = \mathbf{target} + d \begin{pmatrix} \cos\theta \sin\phi \\ \sin\theta \\ \cos\theta \cos\phi \end{pmatrix}
+\end{equation}
+The view matrix is computed with \texttt{glm::lookAt}. The projection matrix uses \texttt{glm::perspective} with a $45°$ vertical field of view, near plane $0.1$~\AA, and far plane $500$~\AA.
+
+Mouse drag updates $\phi$ and $\theta$ (orbit); scroll updates $d$ (zoom). Pitch is clamped to $\pm89°$ to prevent the camera from flipping past the poles.
+
+\subsection{Phase 2 — Molecule Loading}
+
+\subsubsection{PDB Parser}
+
+The \texttt{PDB} class parses Protein Data Bank files~\cite{pdb}. Structures are downloaded from the RCSB Protein Data Bank (\url{https://www.rcsb.org}), which provides free public access to macromolecular structure data. The parser reads \texttt{ATOM} and \texttt{HETATM} records, extracting the $(x, y, z)$ coordinates and element symbol of each atom. After loading, all positions are translated so that the bounding box centre lies at the world-space origin.
+
+The \texttt{getAtomStyle} method returns the CPK colour~\cite{cpk} and van der Waals radius~\cite{bondi1964} for each element. Table~\ref{tab:cpk} shows the values for the most common elements.
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{llll}
+        \toprule
+        Element & CPK Colour (RGB) & vdW Radius (\AA) \\
+        \midrule
+        H  & White  (1.00, 1.00, 1.00) & 1.20 \\
+        C  & Dark grey (0.35, 0.35, 0.38) & 1.70 \\
+        N  & Blue  (0.19, 0.31, 0.97) & 1.55 \\
+        O  & Red   (0.95, 0.15, 0.15) & 1.52 \\
+        S  & Yellow (1.00, 0.78, 0.20) & 1.80 \\
+        \bottomrule
+    \end{tabular}
+    \caption{CPK colours and van der Waals radii for selected elements.}
+    \label{tab:cpk}
+\end{table}
+
+\subsection{Phase 3 — Sphere Ray-Casting}
+
+\subsubsection{Impostor Geometry (CPU side)}
+
+The billboard geometry uses \emph{instanced rendering}, which matches the paper's primitive submission model: one compact record is sent to the GPU per atom, and the GPU reuses a shared 4-corner quad template for every instance. Each atom is described by one \texttt{AtomInstance} struct (centre, radius, CPK colour); the corner buffer advances per vertex while the instance buffer advances per atom (\texttt{glVertexAttribDivisor(..., 1)}). The single draw call is:
+
+\begin{lstlisting}[style=cppstyle]
+glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, numAtoms);
+\end{lstlisting}
+
+This stores atom data once per atom instead of duplicating it four times, which is important for large molecules.
+
+\subsubsection{Vertex Shader}
+
+The vertex shader moves the atom centre to eye space, then expands each corner in the screen-aligned XY plane. Because XY in eye space corresponds to the screen plane, this keeps the quad always facing the camera. The NDC position of each corner is stored in the varying \texttt{vNDC} for use in the fragment shader.
+
+\begin{lstlisting}[style=glslstyle, caption={quadric.vert — billboard expansion in eye space.}]
+vec4 eyeCenter = uView * uModel * vec4(aCenter, 1.0);
+vCenterEye = eyeCenter.xyz;
+
+// Expand in eye-space XY (= screen plane)
+eyeCenter.xy += aCorner * aRadius;
+gl_Position = uProj * eyeCenter;
+
+// Store NDC for ray reconstruction (avoids framebuffer-size dependency)
+vNDC = gl_Position.xy / gl_Position.w;
+\end{lstlisting}
+
+The \texttt{vNDC} varying avoids using \texttt{gl\_FragCoord / uViewport} for ray reconstruction. All four corners of a billboard share the same clip-space $w$ (the same eye-space $z$), so \texttt{vNDC} interpolates linearly and gives the exact NDC position at every fragment — independent of the framebuffer size. This is important on HiDPI (Retina) displays, where the framebuffer is larger than the window size.
+
+\paragraph{Tight NDC bounding box (Sigg et al., eq.~5).}
+\label{sec:ndcbox}
+The billboard corners are placed at the exact screen-space boundary of the sphere's silhouette, following equation~5 of the paper. This matters when an atom is close to the camera: a simple eye-space expansion underestimates the true screen extent and clips the sphere edges, while the tight box always covers the sphere exactly.
+
+For a sphere at eye-space position $(c_x, c_y, c_z)$ with radius $r$, let $Q_x = c_x^2 + c_z^2 - r^2$ and $f_x$ be the horizontal focal length from the projection matrix. The NDC $x$-coordinate of each billboard corner (with $s = \pm 1$ selecting left or right) is:
+\begin{equation}
+    x_{\mathrm{ndc}} = -f_x \,\frac{c_x\sqrt{Q_x} - s\,r\,c_z}{c_z\sqrt{Q_x} + s\,r\,c_x}
+    \label{eq:ndcbox}
+\end{equation}
+The same formula applies for $y$ using $Q_y = c_y^2 + c_z^2 - r^2$ and $f_y$. When $Q \leq 0$ the camera is inside the sphere; in that case the corner covers the full screen edge. The depth component of \texttt{gl\_Position} is taken from the projected sphere centre, since the fragment shader overwrites \texttt{gl\_FragDepth} with the actual ray-sphere hit depth.
+
+\subsubsection{Fragment Shader — Ray-Sphere Intersection}
+
+The fragment shader reconstructs an eye-space ray for each pixel from \texttt{vNDC} and the inverse projection matrix:
+
+\begin{lstlisting}[style=glslstyle, caption={quadric.frag — eye-space ray reconstruction and intersection.}]
+// Reconstruct eye-space ray
+vec4 nearEye = uInvProj * vec4(vNDC, -1.0, 1.0);
+vec4 farEye  = uInvProj * vec4(vNDC,  1.0, 1.0);
+vec3 rO = nearEye.xyz / nearEye.w;  // ray origin (near plane)
+vec3 rD = normalize(farEye.xyz / farEye.w - rO);  // ray direction
+
+// Ray-sphere intersection (Eq. 2)
+vec3  oc   = rO - vCenterEye;
+float b    = dot(oc, rD);
+float c    = dot(oc, oc) - vRadius * vRadius;
+float disc = b * b - c;
+if (disc < 0.0) discard;           // ray misses sphere
+float t = -b - sqrt(disc);
+if (t < 0.0) discard;              // sphere behind camera
+\end{lstlisting}
+
+If the ray hits the sphere, the fragment shader computes the hit position and surface normal in eye space, then writes the correct depth to \texttt{gl\_FragDepth}. This replaces the billboard depth with the true sphere surface depth, enabling correct occlusion between atoms.
+
+\subsection{Phase 4 — Deferred Shading}
+
+\subsubsection{G-buffer Setup}
+
+The G-buffer is an offscreen framebuffer with three attachments:
+
+\begin{itemize}
+    \item \textbf{Diffuse} (\texttt{GL\_RGB8}): the CPK colour after diffuse shading. 8-bit precision is sufficient because colour values are in $[0,1]$.
+    \item \textbf{Normal} (\texttt{GL\_RGB16F}): the eye-space surface normal. 16-bit floating point is required because normal components are in $[-1,1]$ and cannot be represented without sign in \texttt{GL\_RGB8}. The normal is packed into $[0,1]$ before storage (\texttt{normal * 0.5 + 0.5}) and unpacked in the lighting pass.
+    \item \textbf{Depth} (\texttt{GL\_DEPTH\_COMPONENT24}): the per-pixel depth written by \texttt{gl\_FragDepth}.
+\end{itemize}
+
+\subsubsection{Geometry Pass}
+
+In the geometry pass, the G-buffer FBO is bound before drawing. The sphere fragment shader writes to two colour attachments simultaneously using \texttt{glDrawBuffers}:
+
+\begin{lstlisting}[style=glslstyle, caption={quadric.frag — G-buffer outputs.}]
+layout(location = 0) out vec4 oDiffuse;  // attachment 0
+layout(location = 1) out vec4 oNormal;  // attachment 1
+
+oDiffuse = vec4(vColor * diff, 1.0);
+oNormal  = vec4(normalEye * 0.5 + 0.5, 1.0);
+\end{lstlisting}
+
+\subsubsection{Lighting Pass}
+
+After the geometry pass, the default framebuffer is bound and a fullscreen quad is rendered. The lighting fragment shader reads the three G-buffer textures and applies Blinn-Phong shading:
+
+\begin{equation}
+    \mathbf{c} = k_a \mathbf{c}_d + \max(\mathbf{N} \cdot \mathbf{L}, 0)\,\mathbf{c}_d \cdot \mathbf{c}_l + \max(\mathbf{N} \cdot \mathbf{H}, 0)^s \, k_s \, \mathbf{c}_l
+    \label{eq:phong}
+\end{equation}
+
+where $\mathbf{c}_d$ is the diffuse colour from the G-buffer, $\mathbf{c}_l$ is the light colour, $\mathbf{N}$ is the surface normal, $\mathbf{L}$ is the light direction, $\mathbf{H}$ is the halfway vector, $k_a$ is the ambient strength, $k_s$ is the specular strength, and $s$ is the shininess exponent. The eye-space fragment position is reconstructed from depth and the inverse projection matrix, which avoids storing a separate position texture in the G-buffer.
+
+Background pixels (where depth equals 1.0) are discarded with \texttt{discard} so the background colour shows through.
+
+Figure~\ref{fig:lightpass} shows the result after the deferred pipeline was first connected, with Blinn-Phong shading applied to the sphere impostors.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.6\textwidth]{quadric_first_light_pass.png}
+    \caption{First successful deferred lighting pass: crambin (1CRN) with Blinn-Phong shading. The G-buffer stores diffuse colour, eye-space normal, and depth; the lighting pass reads all three and computes the final colour per pixel.}
+    \label{fig:lightpass}
+\end{figure}
+
+\subsection{Phase 5 — Bond Detection}
+
+\subsubsection{Bonds Class}
+
+The \texttt{Bonds} class detects covalent bonds by checking all atom pairs. Two atoms $A$ and $B$ are considered bonded if their distance satisfies:
+\begin{equation}
+    d(A, B) < r_{\mathrm{cov}}(A) + r_{\mathrm{cov}}(B) + \delta
+    \label{eq:bond}
+\end{equation}
+where $r_{\mathrm{cov}}$ is the covalent radius of the element~\cite{alvarez2008} and $\delta = 0.45$~\AA\ is a tolerance that accounts for geometric variation.
+
+\begin{lstlisting}[style=cppstyle, caption={Bonds.cpp — pairwise bond detection.}]
+for (size_t i = 0; i < atoms.size(); ++i) {
+    for (size_t j = i + 1; j < atoms.size(); ++j) {
+        float maxDist = getCovalentRadius(atoms[i].Element)
+                      + getCovalentRadius(atoms[j].Element)
+                      + tolerance;
+        float dist = glm::length(atoms[i].Position - atoms[j].Position);
+        if (dist < maxDist)
+            List.push_back({i, j});
+    }
+}
+\end{lstlisting}
+
+Each bond is stored as a pair of indices into the atom array. This is an $O(N^2)$ algorithm, which is acceptable for proteins of a few thousand atoms. For molecule 1CRN (crambin, 327 atoms), the algorithm detects 337 bonds in negligible time.
+
+\subsubsection{Cylinder Impostor Geometry (CPU side)}
+\label{sec:cylcpu}
+
+The cylinder GPU geometry follows the same instanced rendering design as spheres. Each bond becomes one \texttt{BondInstance} record uploaded once to the GPU:
+
+\begin{lstlisting}[style=cppstyle, caption={BondInstance struct — one record per bond.}]
+struct BondInstance {
+    glm::vec3 PosA;   // world-space position of atom A  (location 1)
+    glm::vec3 PosB;   // world-space position of atom B  (location 2)
+    float     Radius; // cylinder radius (Angstroms)     (location 3)
+    glm::vec3 Color;  // bond colour                     (location 4)
+};
+\end{lstlisting}
+
+The bond colour is the average of the CPK colours of the two bonded atoms. The cylinder radius is fixed at $0.15$~\AA\ for all bonds. The same shared 4-corner VBO used for spheres is reused here, keeping the draw call identical in structure:
+
+\begin{lstlisting}[style=cppstyle]
+glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, numBonds);
+\end{lstlisting}
+
+\subsubsection{Cylinder Vertex Shader — Tight NDC Bounding Box}
+
+The cylinder vertex shader places the billboard corners at the exact screen-space boundary of the cylinder silhouette. Instead of a simple eye-space expansion (which clips cylinder edges at close range, for the same reason described in Section~\ref{sec:ndcbox}), it applies the same Sigg et al.\ tangent-line formula (eq.~\ref{eq:ndcbox}) to \emph{both} endpoints of the bond and takes the union of the two resulting boxes.
+
+For a bond with eye-space endpoints $A$ and $B$, both treated as spheres of radius $r$, the billboard NDC $x$-edges are:
+\begin{equation}
+    x_{\mathrm{left}}  = \min\!\bigl(x_1^A,\; x_2^A,\; x_1^B,\; x_2^B\bigr), \qquad
+    x_{\mathrm{right}} = \max\!\bigl(x_1^A,\; x_2^A,\; x_1^B,\; x_2^B\bigr)
+    \label{eq:cylndcbox}
+\end{equation}
+where $x_1$ and $x_2$ are the two tangent NDC values from eq.~\ref{eq:ndcbox} evaluated at that endpoint (with $s = +1$ and $s = -1$ respectively). The same computation is applied for $y$. The corner selection then uses \texttt{aCorner.x} to pick the left or right edge and \texttt{aCorner.y} for top or bottom, exactly as for the sphere. The depth of \texttt{gl\_Position} is taken from the bond midpoint; the fragment shader overwrites \texttt{gl\_FragDepth} with the real hit depth.
+
+This union always covers the full cylinder silhouette for the bond lengths and viewing distances that occur in molecule rendering.
+
+\subsubsection{Cylinder Fragment Shader — Ray-Cylinder Intersection}
+
+The fragment shader reconstructs an eye-space ray from \texttt{gl\_FragCoord} and the inverse projection matrix (the same method as the sphere shader, using the \texttt{uViewport} uniform set to the actual framebuffer size). It solves the ray-cylinder intersection by decomposing the ray into components parallel and perpendicular to the bond axis $\hat{d}$:
+
+\begin{lstlisting}[style=glslstyle, caption={cylinder.frag — axis-decomposed ray-cylinder intersection.}]
+vec3  d   = normalize(vPosBEye - vPosAEye);
+vec3  Q   = rO - vPosAEye;
+vec3  qc  = Q  - dot(Q,  d) * d;   // Q perpendicular to axis
+vec3  rc  = rD - dot(rD, d) * d;   // rD perpendicular to axis
+
+float a    = dot(rc, rc);
+float b    = dot(qc, rc);
+float c    = dot(qc, qc) - vRadius * vRadius;
+float disc = b * b - a * c;
+if (disc < 0.0 || a < 1e-6) discard;
+\end{lstlisting}
+
+After selecting the nearest positive intersection along the ray, two cap tests reject fragments that fall outside the finite cylinder length:
+
+\begin{lstlisting}[style=glslstyle]
+float proj = dot(hit - vPosAEye, d);
+if (proj < 0.0 || proj > len) discard;
+\end{lstlisting}
+
+The surface normal is the vector from the cylinder axis to the hit point, divided by the radius. The hit depth is written to \texttt{gl\_FragDepth} and the diffuse colour and packed normal are written to the G-buffer, consistent with the sphere shader.
+
+\subsection{Phase 6 — Ground Plane and Shadow Maps}
+
+\subsubsection{Ground Plane}
+
+A flat quad is placed at $y = -r_{\text{bound}} - 0.5$\,\AA\ below the molecule's bounding sphere. It uses the same G-buffer outputs as spheres and cylinders (diffuse colour and packed eye-space normal), so the lighting pass shades it automatically with no extra code.
+
+\subsubsection{Shadow Maps}
+
+A depth-only FBO ($2048\times2048$, \texttt{GL\_DEPTH\_COMPONENT24}) is rendered once per frame from the light's point of view, using an orthographic projection centred on the molecule. Because the scene is made of impostors rather than real geometry, the shadow pass needs custom shaders to clip each billboard to the correct silhouette:
+
+\begin{itemize}
+    \item \textbf{Spheres} — fragments outside the unit circle ($|\texttt{vCorner}| > 1$) are discarded, producing a circular footprint in the shadow map.
+    \item \textbf{Cylinders} — a 2D capsule signed-distance function in light-space NDC clips the billboard to the cylinder's projected silhouette.
+    \item \textbf{Ground plane} — a simple depth-only pass with no clipping needed.
+\end{itemize}
+
+In the lighting pass, the fragment's world-space position (reconstructed from the G-buffer depth and \texttt{uInvView}) is transformed into light space and compared against the shadow map with a $3\times3$ PCF kernel for soft edges. Fragments outside the light frustum are treated as fully lit.
+
+\subsection{Phase 7 — Screen-Space Ambient Occlusion}
+\label{sec:ssao}
+
+\subsubsection{SSAO Pass}
+
+The SSAO pass reads the depth and normal textures from the existing G-buffer. For each fragment, 16 sample points are distributed in a hemisphere aligned with the surface normal. The hemisphere is rotated by a tiled $4\times4$ noise texture to break the regular banding pattern. Each sample is projected back into screen space and its depth compared against the G-buffer; samples that fall behind nearby geometry contribute to the occlusion value. A range-check weight (via \texttt{smoothstep}) avoids contributions from distant geometry. The result is written to a single-channel \texttt{GL\_R32F} texture, where $1.0$ means fully lit and $0.0$ fully occluded.
+
+\subsubsection{SSAO Blur and Integration}
+
+A second fullscreen pass applies a $4\times4$ box blur to remove the high-frequency noise from the small kernel. The blurred occlusion value is then multiplied into the ambient term in the lighting pass:
+\begin{equation}
+    \mathbf{c}_{\text{ambient}} = k_a \cdot \mathbf{c}_d \cdot \mathrm{ao}
+    \label{eq:ssao}
+\end{equation}
+where $\mathrm{ao}$ is clamped to $[0.4,\,1.0]$ to prevent fully black contact areas. The diffuse and specular terms are not affected by SSAO — only the ambient.
+
+% =========================================================================
+\subsection{Phase 8 — Composite Pass and ImGui Interface}
+
+\subsubsection{Composite Pass}
+
+After the lighting pass, a dedicated \textbf{composite pass} applies image-wide adjustments before writing to the screen. The lighting pass now renders into an intermediate \texttt{SceneBuffer} (\texttt{GL\_RGB16F} FBO) instead of the default framebuffer. A fullscreen quad then samples that texture and multiplies by a uniform \texttt{uExposure}:
+
+\begin{lstlisting}[style=glslstyle, caption={composite.frag — exposure control.}]
+FragColor = vec4(texture(uScene, TexCoord).rgb * uExposure, 1.0);
+\end{lstlisting}
+
+No tone mapping or gamma correction is applied. CPK atom colours are already chosen in perceptual (sRGB-like) space, so applying gamma would wash out the image rather than improve it. The intermediate buffer also provides a clean hook for future post-processing effects.
+
+\subsubsection{ImGui Control Panel}
+
+Dear ImGui is vendored into \texttt{external/imgui/} (core source files plus the GLFW and OpenGL3 backends). Six source files are added to \texttt{CMakeLists.txt}. A floating panel is drawn on top of the composited image every frame, divided into labelled sections:
+
+\begin{itemize}
+    \item \textbf{Molecule} — selectable list of all 11 included PDB structures; switching triggers a runtime reload (VBOs are re-uploaded with \texttt{glBufferData}, the ground plane and camera are reset to fit the new molecule).
+    \item \textbf{Animation} — auto-rotate toggle and a ``Reset View'' button that restores the initial camera pose.
+    \item \textbf{Lighting} — light direction (three-axis slider), ambient strength, specular strength, shininess exponent.
+    \item \textbf{Ambient Occlusion} — enable/disable SSAO checkbox; AO radius slider, shown only when SSAO is active.
+    \item \textbf{Camera} — vertical field of view.
+    \item \textbf{Post-Process} — exposure multiplier.
+    \item \textbf{Stats} — live atom count, bond count, and frame rate.
+\end{itemize}
+
+Mouse and scroll callbacks check \texttt{ImGui::GetIO().WantCaptureMouse} before forwarding events to the camera, so dragging a slider does not also orbit the molecule. Figure~\ref{fig:imgui} shows the final control panel.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth]{first_imgui_menu.png}
+    \caption{The ImGui control panel overlaid on the rendered scene. Molecule selection, lighting parameters, SSAO, camera FOV, and live stats are all adjustable at runtime without recompiling.}
+    \label{fig:imgui}
+\end{figure}
+
+% =========================================================================
+\section{Current Results}
+% =========================================================================
+
+The following components are fully implemented and working:
+
+\begin{itemize}
+    \item \textbf{Sphere impostors} — atoms rendered as GPU ray-cast spheres with instanced rendering, exact intersection, correct depth, and G-buffer output.
+    \item \textbf{Cylinder impostors} — bonds rendered as GPU ray-cast cylinders with tight NDC bounding box and axis-decomposed intersection.
+    \item \textbf{Deferred shading} — geometry pass fills the G-buffer; lighting pass applies Blinn-Phong per screen pixel.
+    \item \textbf{Ground plane} — flat quad below the molecule, integrated into the G-buffer pipeline.
+    \item \textbf{Shadow maps} — depth-only pass from the light's point of view with PCF ($3\times3$) soft shadows. Custom shadow shaders clip sphere and cylinder billboards to their correct silhouettes.
+    \item \textbf{SSAO} — 16-sample hemisphere kernel with noise-based rotation, box-blur smoothing, applied to the ambient term (eq.~\ref{eq:ssao}).
+    \item \textbf{Composite pass} — intermediate RGB16F FBO with exposure control; clean separation between lighting and final output.
+    \item \textbf{ImGui panel} — live controls for molecule selection, lighting, SSAO, camera FOV, exposure, and auto-rotation, with a stats overlay.
+    \item \textbf{Runtime molecule switching} — 11 PDB structures selectable at runtime; VBOs and ground plane update without restarting.
+    \item \textbf{Orbit camera} — mouse drag to orbit, scroll to zoom, with correct HiDPI/Retina support.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.48\textwidth]{first_quadric.png}
+    \hfill
+    \includegraphics[width=0.48\textwidth]{quadric_light_and_shadows.png}
+    \caption{Left: crambin (1CRN) after the initial deferred lighting pass (spheres only). Right: full pipeline — spheres, cylinders, ground plane, PCF shadows, and SSAO.}
+    \label{fig:result}
+\end{figure}
+
+% =========================================================================
+\section{Development Challenges}
+% =========================================================================
+
+This section documents the non-trivial bugs encountered during development, their root causes, and how each was resolved.
+
+% -------------------------------------------------------------------------
+\subsection{Retina/HiDPI — Framebuffer vs.\ Window Size}
+
+On macOS Retina displays the \emph{framebuffer} size is twice the \emph{window} size in each dimension. This caused two separate bugs.
+
+\textbf{Bug 1 — G-buffer too small.} The G-buffer was created using the window constants (\texttt{SCR\_WIDTH = 800}, \texttt{SCR\_HEIGHT = 600}), but the actual framebuffer was $1600\times1200$. The lighting pass therefore covered only the bottom-left quarter of the screen.
+
+\textbf{Fix.} All FBO allocations and viewports now use \texttt{glfwGetFramebufferSize} instead of the window size constants:
+\begin{lstlisting}[style=cppstyle]
+glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+gbuf.create(fbWidth, fbHeight);
+\end{lstlisting}
+
+\textbf{Bug 2 — Wrong ray directions.} An earlier ray reconstruction used \texttt{gl\_FragCoord.xy / uViewport}, where \texttt{uViewport} was the window size. On Retina, \texttt{gl\_FragCoord} is in framebuffer pixels, so the division produced values in $[0,2]$ instead of $[0,1]$, giving completely wrong ray directions.
+
+\textbf{Fix.} The \texttt{uViewport} uniform was removed. Instead, the vertex shader passes the NDC position of each corner as a varying:
+\begin{lstlisting}[style=glslstyle]
+vNDC = gl_Position.xy / gl_Position.w;
+\end{lstlisting}
+All four corners of a billboard share the same clip-space $w$, so \texttt{vNDC} interpolates correctly and the fragment shader reconstructs the ray with no dependency on framebuffer size.
+
+\textbf{Lesson.} On HiDPI systems, window size and framebuffer size are different quantities. Every resource that must match the pixel grid must be sized with \texttt{glfwGetFramebufferSize}.
+
+% -------------------------------------------------------------------------
+\subsection{Corrupted Normals — Wrong G-buffer Texture Format}
+
+\textbf{Symptom.} After connecting the deferred lighting pass, the shading looked incorrect: some spheres were flat or very dark, independent of the light direction.
+
+\textbf{Root cause.} The normal G-buffer texture was initially allocated with the internal format \texttt{GL\_RGB8}, which stores unsigned normalised values in $[0, 1]$. Eye-space surface normals have components in $[-1, 1]$. Although we packed the normal with \texttt{normal * 0.5 + 0.5} before storing it, the GPU clamped the stored values to $[0, 1]$ before writing (because \texttt{GL\_RGB8} is an unsigned format). Negative normal components were silently lost.
+
+\textbf{Fix.} The normal attachment was changed to \texttt{GL\_RGB16F}, a 16-bit signed floating-point format that can represent the full $[-1, 1]$ range without clamping:
+\begin{lstlisting}[style=cppstyle]
+// Normals: 16-bit float — required for signed values in [-1, 1]
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F,
+             w, h, 0, GL_RGB, GL_FLOAT, nullptr);
+\end{lstlisting}
+
+\textbf{Lesson.} \texttt{GL\_RGB8} is an unsigned normalised format. Any G-buffer attachment that must store signed data (normals, motion vectors) requires a signed or floating-point format such as \texttt{GL\_RGB16F} or \texttt{GL\_RGB16\_SNORM}.
+
+% -------------------------------------------------------------------------
+\subsection{FBO Size Not Updated on Window Resize}
+
+\textbf{Symptom.} Resizing the application window broke the rendering: atoms appeared deformed and the image was incorrectly scaled.
+
+\textbf{Root cause.} All FBOs (G-buffer, SSAO, scene buffer) are allocated at startup to match the initial framebuffer size. The \texttt{framebuffer\_size\_callback} updated \texttt{fbWidth}/\texttt{fbHeight} and reset the viewport, but never recreated the FBOs. On the next frame, the geometry pass wrote into a texture with the old dimensions while the viewport expected the new ones, producing corrupted output.
+
+\textbf{Fix.} A boolean flag \texttt{fbDirty} is set to \texttt{true} in the resize callback. At the start of each render loop iteration, if \texttt{fbDirty} is set, all four FBOs are destroyed and recreated at the current size before any rendering begins:
+\begin{lstlisting}[style=cppstyle]
+if (fbDirty && fbWidth > 0 && fbHeight > 0) {
+    gbuf.create(fbWidth, fbHeight);
+    ssaoBuf.create(fbWidth, fbHeight);
+    ssaoBlurBuf.create(fbWidth, fbHeight);
+    sceneBuf.create(fbWidth, fbHeight);
+    fbDirty = false;
+}
+\end{lstlisting}
+
+\textbf{Lesson.} Any FBO or texture that must match the screen resolution must be recreated on every window resize, not only at startup.
+
+% =========================================================================
+\section{Conclusion}
+% =========================================================================
+
+This project successfully implements the GPU ray-casting method of Sigg et al.~\cite{sigg2006} within a modern deferred shading pipeline. Sphere and cylinder impostors produce pixel-perfect silhouettes and surface normals at any zoom level, with no tessellation artefacts. The full pipeline — geometry pass, shadow map, SSAO, composite pass, and ImGui overlay — runs at 60~FPS on consumer hardware for molecules up to several thousand atoms, confirming that the impostor-based approach is viable for interactive molecular visualisation.
+
+The most significant technical insight encountered during development was the numerical instability of the paper's parameter-space ray transformation under perspective at large zoom-out distances. Solving the intersection directly in eye space avoids the ill-conditioned matrix inversion and is mathematically equivalent for spheres. A second key insight was the importance of the tight NDC bounding box (eq.~\ref{eq:ndcbox}): without it, atom silhouettes are clipped at close range because the eye-space billboard expansion underestimates the true screen extent of the sphere.
+
+\paragraph{Limitations.}
+Several aspects of the current implementation have known limitations:
+\begin{itemize}
+    \item \textbf{Bond detection complexity.} The pairwise distance check is $O(N^2)$ in the number of atoms. This is acceptable for proteins of a few thousand atoms but causes a noticeable delay when loading large structures such as GroEL ($\approx 58\,000$ atoms) or the ribosome ($\approx 100\,000$ atoms). A spatial acceleration structure (e.g.\ a uniform grid or k-d tree) would reduce this to $O(N \log N)$.
+    \item \textbf{SSAO noise.} With 16 hemisphere samples the raw occlusion signal is noisy; the $4\times4$ box blur reduces but does not fully eliminate the artefact. A larger kernel, importance-weighted sampling, or temporal accumulation would give a cleaner result.
+    \item \textbf{Single light source.} The shading model supports only one directional light. Point lights, area lights, or image-based lighting are not implemented.
+    \item \textbf{No transparency.} All surfaces are opaque. Selecting or highlighting individual atoms — a common requirement in molecular visualisation software — would require order-independent transparency.
+\end{itemize}
+
+\paragraph{Future work.}
+Natural extensions include: a ball-and-stick / space-fill representation toggle; temporal SSAO accumulation for a noise-free signal at low sample counts; per-atom selection and highlighting; and a spatial acceleration structure to make large-molecule loading interactive. The deferred pipeline and composite pass provide a clean foundation for any of these additions without restructuring the existing render loop.
+
+% =========================================================================
+\begin{thebibliography}{9}
+
+\bibitem{sigg2006}
+Sigg, C., Weyrich, T., Botsch, M., \& Gross, M. (2006).
+\textit{GPU-Based Ray-Casting of Quadratic Surfaces.}
+Eurographics Symposium on Point-Based Graphics.
+\url{http://reality.cs.ucl.ac.uk/projects/quadrics/pbg06.pdf}
+
+\bibitem{bondi1964}
+Bondi, A. (1964).
+van der Waals Volumes and Radii.
+\textit{Journal of Physical Chemistry}, 68(3), 441--451.
+\url{https://doi.org/10.1021/j100785a001}
+
+\bibitem{alvarez2008}
+Alvarez, S. (2008).
+Are the radii of atoms constant in chemical combinations?
+\textit{Dalton Transactions}, 2832--2838.
+\url{https://doi.org/10.1039/b801115j}
+
+\bibitem{cpk}
+Corey, R. B., \& Pauling, L. (1953).
+Molecular models of amino acids, peptides, and proteins.
+\textit{Review of Scientific Instruments}, 24(8), 621--627.
+
+\bibitem{pdb}
+Berman, H. M., et al. (2000).
+The Protein Data Bank.
+\textit{Nucleic Acids Research}, 28(1), 235--242.
+\url{https://doi.org/10.1093/nar/28.1.235}
+
+\end{thebibliography}
+
+\end{document}
