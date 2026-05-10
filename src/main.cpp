@@ -31,6 +31,7 @@ GLfloat lastX          = SCR_WIDTH  / 2.0f;
 GLfloat lastY          = SCR_HEIGHT / 2.0f;
 bool firstMouse        = true;
 bool leftButtonPressed = false;
+bool fbDirty           = false;  // set when the window is resized; triggers FBO recreation
 
 //Actual framebuffer size differs from SCR_WIDTH/SCR_HEIGHT on Retina/HiDPI
 
@@ -272,8 +273,10 @@ int main() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
+    ImGui::GetStyle().WindowRounding = 6.0f;
+    ImGui::GetStyle().FrameRounding  = 4.0f;
     ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 410");
+    ImGui_ImplOpenGL3_Init("#version 410 core");
 
     //G-buffer at full framebuffer resolution.
     GBuffer gbuf;
@@ -487,14 +490,28 @@ int main() {
     Shader lightingShader("../shaders/lighting.vert",
                           "../shaders/lighting.frag");
     Shader compositeShader("../shaders/lighting.vert", "../shaders/composite.frag");
-    float exposure    = 1.0f;  // controlled via ImGui
-    float ssaoRadius  = 1.0f;  // controlled via ImGui
+    float exposure    = 1.0f;   // controlled via ImGui
+    float ssaoRadius  = 1.0f;   // controlled via ImGui
+    bool  ssaoEnabled = true;
+    bool  autoRotate  = false;
 
     Renderer screenQuad;
     screenQuad.initQuad();
     //Render loop
     while (!glfwWindowShouldClose(window)) {
         processInput(window);
+
+        if (autoRotate)
+            camera.Yaw += 0.005f;
+
+        //Recreate all FBOs when the window is resized
+        if (fbDirty && fbWidth > 0 && fbHeight > 0) {
+            gbuf.create(fbWidth, fbHeight);
+            ssaoBuf.create(fbWidth, fbHeight);
+            ssaoBlurBuf.create(fbWidth, fbHeight);
+            sceneBuf.create(fbWidth, fbHeight);
+            fbDirty = false;
+        }
 
         //Depth map from light's perspective (for shadow map)
         //Used in lighting pass
@@ -602,42 +619,49 @@ int main() {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
 
-        //SSAO PASS 
-        //Compute per-fragment ambient occlusion into ssaoBuf-R32F
-        glBindFramebuffer(GL_FRAMEBUFFER, ssaoBuf.fbo);
-        glViewport(0, 0, fbWidth, fbHeight);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glDisable(GL_DEPTH_TEST);
+        //SSAO PASS
+        if (ssaoEnabled) {
+            //Compute per-fragment ambient occlusion into ssaoBuf-R32F
+            glBindFramebuffer(GL_FRAMEBUFFER, ssaoBuf.fbo);
+            glViewport(0, 0, fbWidth, fbHeight);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDisable(GL_DEPTH_TEST);
 
-        ssaoShader.use();
-        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, gbuf.normalTex);
-        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, gbuf.depthTex);
-        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, noiseTex);
-        ssaoShader.setInt("gNormal",   0);
-        ssaoShader.setInt("gDepth",    1);
-        ssaoShader.setInt("uNoiseTex", 2);
-        ssaoShader.setVec2("uNoiseScale",
-                           glm::vec2(float(fbWidth) / 4.0f, float(fbHeight) / 4.0f));
-        ssaoShader.setMat4("uProj",    proj);
-        ssaoShader.setMat4("uInvProj", glm::inverse(proj));
-        ssaoShader.setFloat("uRadius", ssaoRadius);
-        for (int i = 0; i < 16; ++i)
-            ssaoShader.setVec3("uKernel[" + std::to_string(i) + "]", ssaoKernel[i]);
-        screenQuad.drawQuad();
-        glEnable(GL_DEPTH_TEST);
+            ssaoShader.use();
+            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, gbuf.normalTex);
+            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, gbuf.depthTex);
+            glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, noiseTex);
+            ssaoShader.setInt("gNormal",   0);
+            ssaoShader.setInt("gDepth",    1);
+            ssaoShader.setInt("uNoiseTex", 2);
+            ssaoShader.setVec2("uNoiseScale",
+                               glm::vec2(float(fbWidth) / 4.0f, float(fbHeight) / 4.0f));
+            ssaoShader.setMat4("uProj",    proj);
+            ssaoShader.setMat4("uInvProj", glm::inverse(proj));
+            ssaoShader.setFloat("uRadius", ssaoRadius);
+            for (int i = 0; i < 16; ++i)
+                ssaoShader.setVec3("uKernel[" + std::to_string(i) + "]", ssaoKernel[i]);
+            screenQuad.drawQuad();
+            glEnable(GL_DEPTH_TEST);
 
-        //SSAO BLUR PASS
-        //Box-blur the raw occlusion to remove high-frequency noise
-        glBindFramebuffer(GL_FRAMEBUFFER, ssaoBlurBuf.fbo);
-        glViewport(0, 0, fbWidth, fbHeight);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glDisable(GL_DEPTH_TEST);
+            //SSAO BLUR PASS
+            //Box-blur the raw occlusion to remove high-frequency noise
+            glBindFramebuffer(GL_FRAMEBUFFER, ssaoBlurBuf.fbo);
+            glViewport(0, 0, fbWidth, fbHeight);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDisable(GL_DEPTH_TEST);
 
-        ssaoBlurShader.use();
-        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, ssaoBuf.tex);
-        ssaoBlurShader.setInt("uSSAO", 0);
-        screenQuad.drawQuad();
-        glEnable(GL_DEPTH_TEST);
+            ssaoBlurShader.use();
+            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, ssaoBuf.tex);
+            ssaoBlurShader.setInt("uSSAO", 0);
+            screenQuad.drawQuad();
+            glEnable(GL_DEPTH_TEST);
+        } else {
+            //Fill ssaoBlurBuf with 1.0 so the lighting pass sees no occlusion
+            glBindFramebuffer(GL_FRAMEBUFFER, ssaoBlurBuf.fbo);
+            glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
 
         //LIGHTING PASS
         glBindFramebuffer(GL_FRAMEBUFFER, sceneBuf.fbo);
@@ -707,14 +731,42 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::Begin("Scene Controls");
-        ImGui::SliderFloat("Exposure",    &exposure,         0.1f,  3.0f);
-        ImGui::SliderFloat("Ambient",     &ambientStrength,  0.0f,  1.0f);
-        ImGui::SliderFloat("Specular",    &specStrength,     0.0f,  1.0f);
-        ImGui::SliderFloat("Shininess",   &shininess,        1.0f,  128.0f);
-        ImGui::SliderFloat("SSAO Radius", &ssaoRadius,       0.1f,  5.0f);
-        ImGui::SliderFloat("FOV",         &camera.Fov,       10.0f, 120.0f);
-        ImGui::SliderFloat3("Light Dir",  glm::value_ptr(lightDirWorld), -1.0f, 1.0f);
+        ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+
+        ImGui::SeparatorText("Animation");
+        ImGui::Checkbox("Auto-Rotate", &autoRotate);
+        ImGui::SameLine();
+        if (ImGui::Button("Reset View")) {
+            camera.Target   = glm::vec3(0.0f);
+            camera.Distance = molecule.BoundingRadius * 2.5f;
+            camera.Yaw      = glm::radians(45.0f);
+            camera.Pitch    = glm::radians(30.0f);
+        }
+
+        ImGui::SeparatorText("Lighting");
+        ImGui::SliderFloat3("Light Dir", glm::value_ptr(lightDirWorld), -1.0f, 1.0f);
+        ImGui::SliderFloat("Ambient",    &ambientStrength, 0.0f,  1.0f,   "%.2f");
+        ImGui::SliderFloat("Specular",   &specStrength,    0.0f,  1.0f,   "%.2f");
+        ImGui::SliderFloat("Shininess",  &shininess,       1.0f,  128.0f, "%.0f");
+
+        ImGui::SeparatorText("Ambient Occlusion");
+        ImGui::Checkbox("Enable SSAO", &ssaoEnabled);
+        if (ssaoEnabled)
+            ImGui::SliderFloat("AO Radius", &ssaoRadius, 0.1f, 5.0f, "%.2f");
+
+        ImGui::SeparatorText("Camera");
+        ImGui::SliderFloat("FOV", &camera.Fov, 10.0f, 120.0f, "%.0f deg");
+
+        ImGui::SeparatorText("Post-Process");
+        ImGui::SliderFloat("Exposure", &exposure, 0.1f, 3.0f, "%.2f");
+
+        ImGui::SeparatorText("Stats");
+        ImGui::Text("Atoms:  %d", (int)atomInstances.size());
+        ImGui::Text("Bonds:  %d", (int)bondInstances.size());
+        ImGui::Text("FPS:    %.1f", ImGui::GetIO().Framerate);
+
         ImGui::End();
 
         ImGui::Render();
@@ -751,6 +803,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     fbWidth  = width;
     fbHeight = height;
     glViewport(0, 0, width, height);
+    fbDirty  = true;
 }
 
 void processInput(GLFWwindow *window) {
