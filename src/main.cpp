@@ -495,6 +495,22 @@ int main() {
     bool  ssaoEnabled = true;
     bool  autoRotate  = false;
 
+    // Available PDB molecules — added in commit #29
+    const std::vector<std::string> pdbFiles = {
+        "../data/1crn.pdb", "../data/1ubq.pdb", "../data/1mbn.pdb",
+        "../data/1aon.pdb", "../data/1ffk.pdb", "../data/1gfl.pdb",
+        "../data/1hhp.pdb", "../data/2ins.pdb", "../data/2lyz.pdb",
+        "../data/3hhb.pdb", "../data/4hhb.pdb"
+    };
+    const std::vector<std::string> pdbLabels = {
+        "1CRN  Crambin",     "1UBQ  Ubiquitin",   "1MBN  Myoglobin",
+        "1AON  GroEL",       "1FFK  Ribosome",    "1GFL  GFP",
+        "1HHP  HIV-PR",      "2INS  Insulin",     "2LYZ  Lysozyme",
+        "3HHB  Hemoglobin",  "4HHB  Hemoglobin R"
+    };
+    int selectedMolecule = 0;
+    int loadedMolecule   = 0; // 1crn.pdb is already loaded at startup
+
     Renderer screenQuad;
     screenQuad.initQuad();
     //Render loop
@@ -511,6 +527,61 @@ int main() {
             ssaoBlurBuf.create(fbWidth, fbHeight);
             sceneBuf.create(fbWidth, fbHeight);
             fbDirty = false;
+        }
+
+        //Reload molecule when the user picks a different one from the ImGui panel
+        if (selectedMolecule != loadedMolecule) {
+            if (molecule.load(pdbFiles[selectedMolecule])) {
+                bonds.build(molecule.Atoms);
+
+                atomInstances.clear();
+                for (const Atom& a : molecule.Atoms) {
+                    AtomStyle style = PDB::getAtomStyle(a.Element);
+                    atomInstances.push_back({a.Position, style.Radius, style.Color});
+                }
+                glBindBuffer(GL_ARRAY_BUFFER, sphereInstanceVBO);
+                glBufferData(GL_ARRAY_BUFFER,
+                             atomInstances.size() * sizeof(AtomInstance),
+                             atomInstances.data(), GL_DYNAMIC_DRAW);
+
+                bondInstances.clear();
+                for (const Bond& bond : bonds.List) {
+                    const Atom& a = molecule.Atoms[bond.A];
+                    const Atom& b = molecule.Atoms[bond.B];
+                    AtomStyle styleA = PDB::getAtomStyle(a.Element);
+                    AtomStyle styleB = PDB::getAtomStyle(b.Element);
+                    bondInstances.push_back({a.Position, b.Position,
+                                             BOND_RADIUS,
+                                             0.5f * (styleA.Color + styleB.Color)});
+                }
+                glBindBuffer(GL_ARRAY_BUFFER, cylinderInstanceVBO);
+                glBufferData(GL_ARRAY_BUFFER,
+                             bondInstances.size() * sizeof(BondInstance),
+                             bondInstances.data(), GL_DYNAMIC_DRAW);
+
+                //Update ground plane to fit the new molecule
+                float gY  = -molecule.BoundingRadius - 0.5f;
+                float gHS =  molecule.BoundingRadius * 4.0f;
+                float newGround[] = {
+                    -gHS, gY, -gHS, 0.f,1.f,0.f,
+                     gHS, gY, -gHS, 0.f,1.f,0.f,
+                    -gHS, gY,  gHS, 0.f,1.f,0.f,
+                     gHS, gY,  gHS, 0.f,1.f,0.f,
+                };
+                glBindBuffer(GL_ARRAY_BUFFER, groundVBO);
+                glBufferData(GL_ARRAY_BUFFER, sizeof(newGround), newGround, GL_DYNAMIC_DRAW);
+
+                //Reset the camera to frame the new molecule
+                camera.Target   = glm::vec3(0.0f);
+                camera.Distance = molecule.BoundingRadius * 2.5f;
+                camera.Yaw      = glm::radians(45.0f);
+                camera.Pitch    = glm::radians(30.0f);
+
+                loadedMolecule = selectedMolecule;
+            } else {
+                std::cerr << "ERROR: could not load " << pdbFiles[selectedMolecule] << "\n";
+                selectedMolecule = loadedMolecule; // revert if load failed
+            }
         }
 
         //Depth map from light's perspective (for shadow map)
@@ -734,6 +805,11 @@ int main() {
         ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_FirstUseEver);
         ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+
+        ImGui::SeparatorText("Molecule");
+        for (int i = 0; i < (int)pdbLabels.size(); ++i)
+            if (ImGui::Selectable(pdbLabels[i].c_str(), selectedMolecule == i))
+                selectedMolecule = i;
 
         ImGui::SeparatorText("Animation");
         ImGui::Checkbox("Auto-Rotate", &autoRotate);
