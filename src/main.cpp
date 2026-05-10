@@ -13,6 +13,10 @@
 #include <cmath>
 #include <string>
 
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow *window);
 void mouse_callback(GLFWwindow* window, double xposIn, double yposIn);
@@ -264,6 +268,13 @@ int main() {
     //larger than the window size (e.g. 1600x1200 for an 800x600 window)
     glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
 
+    //ImGui setup
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 410");
+
     //G-buffer at full framebuffer resolution.
     GBuffer gbuf;
     gbuf.create(fbWidth, fbHeight);
@@ -476,7 +487,8 @@ int main() {
     Shader lightingShader("../shaders/lighting.vert",
                           "../shaders/lighting.frag");
     Shader compositeShader("../shaders/lighting.vert", "../shaders/composite.frag");
-    float exposure = 1.0f; // controlled via ImGui
+    float exposure    = 1.0f;  // controlled via ImGui
+    float ssaoRadius  = 1.0f;  // controlled via ImGui
 
     Renderer screenQuad;
     screenQuad.initQuad();
@@ -608,7 +620,7 @@ int main() {
                            glm::vec2(float(fbWidth) / 4.0f, float(fbHeight) / 4.0f));
         ssaoShader.setMat4("uProj",    proj);
         ssaoShader.setMat4("uInvProj", glm::inverse(proj));
-        ssaoShader.setFloat("uRadius", 1.0f);
+        ssaoShader.setFloat("uRadius", ssaoRadius);
         for (int i = 0; i < 16; ++i)
             ssaoShader.setVec3("uKernel[" + std::to_string(i) + "]", ssaoKernel[i]);
         screenQuad.drawQuad();
@@ -690,10 +702,32 @@ int main() {
         //Depth test re-enabled
         glEnable(GL_DEPTH_TEST);
 
+        //IMGUI PASS
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        ImGui::Begin("Scene Controls");
+        ImGui::SliderFloat("Exposure",    &exposure,         0.1f,  3.0f);
+        ImGui::SliderFloat("Ambient",     &ambientStrength,  0.0f,  1.0f);
+        ImGui::SliderFloat("Specular",    &specStrength,     0.0f,  1.0f);
+        ImGui::SliderFloat("Shininess",   &shininess,        1.0f,  128.0f);
+        ImGui::SliderFloat("SSAO Radius", &ssaoRadius,       0.1f,  5.0f);
+        ImGui::SliderFloat("FOV",         &camera.Fov,       10.0f, 120.0f);
+        ImGui::SliderFloat3("Light Dir",  glm::value_ptr(lightDirWorld), -1.0f, 1.0f);
+        ImGui::End();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
         glfwSwapBuffers(window);
         glfwPollEvents();
 }
         
+
+ImGui_ImplOpenGL3_Shutdown();
+ImGui_ImplGlfw_Shutdown();
+ImGui::DestroyContext();
 
 glDeleteVertexArrays(1, &sphereVAO);
 glDeleteVertexArrays(1, &cylinderVAO);
@@ -742,7 +776,7 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
     lastX = xpos;
     lastY = ypos;
 
-    if (leftButtonPressed)
+    if (leftButtonPressed && !ImGui::GetIO().WantCaptureMouse)
         camera.ProcessMouseMovement(xoffset, yoffset);
 }
 
@@ -756,5 +790,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 
 // Just zooms in or out
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
-    camera.ProcessMouseScroll(static_cast<GLfloat>(yoffset));
+    if (!ImGui::GetIO().WantCaptureMouse)
+        camera.ProcessMouseScroll(static_cast<GLfloat>(yoffset));
 }
