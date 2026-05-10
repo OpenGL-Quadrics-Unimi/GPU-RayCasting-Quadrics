@@ -28,7 +28,8 @@ GLfloat lastY          = SCR_HEIGHT / 2.0f;
 bool firstMouse        = true;
 bool leftButtonPressed = false;
 
-//Actual framebuffer size — differs from SCR_WIDTH/SCR_HEIGHT on Retina/HiDPI
+//Actual framebuffer size differs from SCR_WIDTH/SCR_HEIGHT on Retina/HiDPI
+
 //displays where the framebuffer is 2× the window size in each dimension (this avoids the set of molecules to be put in the bottom left corner of the window and the rest of the window to be empty). Updated in framebuffer_size_callback.
 int fbWidth  = SCR_WIDTH;
 int fbHeight = SCR_HEIGHT;
@@ -154,6 +155,35 @@ struct SSAOBuffer {
     }
 };
 
+// RGB16F FBO for the lit scene (written by the lighting pass, read by the composite pass).
+struct SceneBuffer {
+    GLuint fbo = 0, tex = 0;
+
+    void destroy() {
+        if (tex) glDeleteTextures(1, &tex);
+        if (fbo) glDeleteFramebuffers(1, &fbo);
+        tex = fbo = 0;
+    }
+
+    void create(int w, int h) {
+        destroy();
+        glGenFramebuffers(1, &fbo);
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, w, h, 0, GL_RGB, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, tex, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::cerr << "ERROR: scene FBO incomplete\n";
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+};
+
 //Depth-only FBO for shadow mapping
 //Uses a 2048×2048 GL_DEPTH_COMPONENT24 texture; border colour set to 1
 //so fragments outside the light frustum are never shadowed
@@ -246,6 +276,10 @@ int main() {
     SSAOBuffer ssaoBuf, ssaoBlurBuf;
     ssaoBuf.create(fbWidth, fbHeight);
     ssaoBlurBuf.create(fbWidth, fbHeight);
+
+    // Scene buffer — lighting pass renders here; composite pass reads it.
+    SceneBuffer sceneBuf;
+    sceneBuf.create(fbWidth, fbHeight);
 
     //Hemisphere kernel-16 samples in tangent space, biased toward the surface
     std::uniform_real_distribution<float> randFloats(0.0f, 1.0f);
@@ -375,7 +409,7 @@ int main() {
     glGenBuffers(1, &cylinderInstanceVBO);
 
     glBindVertexArray(cylinderVAO);
-    //loc 0: corner offset — per-vertex
+    //loc 0: corner offset per-vertex
     glBindBuffer(GL_ARRAY_BUFFER, cornerVBO);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void*)0);
     glEnableVertexAttribArray(0);
@@ -429,7 +463,7 @@ int main() {
     Shader cylinderShader("../shaders/cylinder.vert", "../shaders/cylinder.frag");
     Shader groundShader("../shaders/ground.vert",   "../shaders/ground.frag");
 
-    //Shadow-pass shaders — sphere and cylinder use special fragment shaders
+    //Shadow-pass shaders for sphere and cylinder 
     // fragments outside the silhouette are discarded
     Shader shadowSphereShader("../shaders/shadowsphere.vert",   "../shaders/shadowsphere.frag");
     Shader shadowCylShader   ("../shaders/shadowcylinder.vert", "../shaders/shadowcylinder.frag");
@@ -441,6 +475,8 @@ int main() {
 
     Shader lightingShader("../shaders/lighting.vert",
                           "../shaders/lighting.frag");
+    Shader compositeShader("../shaders/lighting.vert", "../shaders/composite.frag");
+    float exposure = 1.0f; // controlled via ImGui
 
     Renderer screenQuad;
     screenQuad.initQuad();
@@ -592,11 +628,10 @@ int main() {
         glEnable(GL_DEPTH_TEST);
 
         //LIGHTING PASS
-       //Read the G-buffer, apply Phong, write to the default framebuffer
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, sceneBuf.fbo);
         glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT);
 
         // Fullscreen quad covers the whole screen
         // Depth test rejects fragments-depth = 1
@@ -624,7 +659,7 @@ int main() {
         lightingShader.setInt("uShadowMap",  3);
         lightingShader.setInt("uSSAOTex",    4);
 
-        //Position is reconstructed from depth — needs the same proj as geo pass
+        //Position is reconstructed from depth (needs the same proj as geo pass)
         lightingShader.setMat4("uInvProj",          glm::inverse(proj));
         lightingShader.setMat4("uInvView",          glm::inverse(view));
         lightingShader.setMat4("uLightSpaceMatrix", lightSpaceMatrix);
@@ -637,6 +672,19 @@ int main() {
         lightingShader.setFloat("uSpecStrength", specStrength);
         lightingShader.setFloat("uShininess",    shininess);
 
+        screenQuad.drawQuad();
+
+        //COMPOSITE PASS
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, fbWidth, fbHeight);
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        compositeShader.use();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, sceneBuf.tex);
+        compositeShader.setInt  ("uScene",    0);
+        compositeShader.setFloat("uExposure", exposure);
         screenQuad.drawQuad();
 
         //Depth test re-enabled
@@ -658,6 +706,7 @@ gbuf.destroy();
 shadowMap.destroy();
 ssaoBuf.destroy();
 ssaoBlurBuf.destroy();
+sceneBuf.destroy();
 glDeleteTextures(1, &noiseTex);
 glfwTerminate();
 return 0;
