@@ -1,5 +1,6 @@
 #version 410 core
 
+in vec2  vNDC;
 in vec3  vPosAEye;
 in vec3  vPosBEye;
 in float vRadius;
@@ -7,17 +8,15 @@ in vec3  vColor;
 
 uniform mat4 uInvProj;
 uniform mat4 uProj;
-uniform vec2 uViewport;
 
 layout(location = 0) out vec3 oDiffuse;
 layout(location = 1) out vec3 oNormal;
 
 void main()
 {
-    // Reconstruct eye-space ray from this fragment's screen position
-    vec2 ndc      = (gl_FragCoord.xy / uViewport) * 2.0 - 1.0;
-    vec4 nearEye4 = uInvProj * vec4(ndc, -1.0, 1.0);
-    vec4 farEye4  = uInvProj * vec4(ndc,  1.0, 1.0);
+    // Reconstruct eye-space ray using the NDC position interpolated from the vertex shader.
+    vec4 nearEye4 = uInvProj * vec4(vNDC, -1.0, 1.0);
+    vec4 farEye4  = uInvProj * vec4(vNDC,  1.0, 1.0);
     vec3 rO = nearEye4.xyz / nearEye4.w;
     vec3 rD = normalize(farEye4.xyz / farEye4.w - rO);
 

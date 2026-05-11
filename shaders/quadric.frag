@@ -1,22 +1,22 @@
 #version 410 core
 
+in vec2  vNDC;
 in vec3  vCenterEye;
 in float vRadius;
 in vec3  vColor;
 
 uniform mat4 uInvProj;   // NDC -> eye space
 uniform mat4 uProj;      // eye space -> clip (for depth write)
-uniform vec2 uViewport;  // (width, height) in pixels
 
 layout (location = 0) out vec3 oDiffuse;
 layout (location = 1) out vec3 oNormal;
 
 void main()
 {
-    //Reconstruct an eye-space ray from this fragment's NDC 
-    vec2 ndc = (gl_FragCoord.xy / uViewport) * 2.0 - 1.0;
-    vec4 nearEye4 = uInvProj * vec4(ndc, -1.0, 1.0);
-    vec4 farEye4  = uInvProj * vec4(ndc,  1.0, 1.0);
+    // Reconstruct eye-space ray using the NDC position interpolated from the vertex shader.
+    // This avoids any dependency on framebuffer/window size (no uViewport needed).
+    vec4 nearEye4 = uInvProj * vec4(vNDC, -1.0, 1.0);
+    vec4 farEye4  = uInvProj * vec4(vNDC,  1.0, 1.0);
     vec3 rO = nearEye4.xyz / nearEye4.w;
     vec3 rD = normalize(farEye4.xyz / farEye4.w - rO);
 

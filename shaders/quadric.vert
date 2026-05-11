@@ -12,6 +12,7 @@ uniform mat4 uView;
 uniform mat4 uProj;
 uniform mat4 uModel;
 
+out vec2  vNDC;       // NDC position of this fragment — interpolated from the tight box corners
 out vec3  vCenterEye;
 out float vRadius;
 out vec3  vColor;
@@ -55,6 +56,11 @@ void main()
     float z_ndc     = clipCenter.z / clipCenter.w;
 
     gl_Position = vec4(x_ndc, y_ndc, z_ndc, 1.0);
+
+    // w = 1.0, so vNDC = gl_Position.xy / gl_Position.w = gl_Position.xy exactly.
+    // Interpolating this across the quad gives the exact NDC for every fragment,
+    // with no dependency on the framebuffer size.
+    vNDC = vec2(x_ndc, y_ndc);
 
     vCenterEye = eyeCenter;
     vRadius    = aRadius;

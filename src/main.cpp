@@ -661,7 +661,6 @@ int main() {
         quadricShader.setMat4("uProj",    proj);
         quadricShader.setMat4("uModel",   model);
         quadricShader.setMat4("uInvProj", glm::inverse(proj));
-        quadricShader.setVec2("uViewport", glm::vec2(fbWidth, fbHeight));
 
         glBindVertexArray(sphereVAO);
         glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
@@ -674,7 +673,6 @@ int main() {
         cylinderShader.setMat4("uProj",    proj);
         cylinderShader.setMat4("uModel",   model);
         cylinderShader.setMat4("uInvProj", glm::inverse(proj));
-        cylinderShader.setVec2("uViewport", glm::vec2(fbWidth, fbHeight));
         glBindVertexArray(cylinderVAO);
         glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
                               static_cast<GLsizei>(bondInstances.size()));
