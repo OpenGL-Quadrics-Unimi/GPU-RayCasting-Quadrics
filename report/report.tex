@@ -392,7 +392,7 @@ A depth-only FBO ($2048\times2048$, \texttt{GL\_DEPTH\_COMPONENT24}) is rendered
     \item \textbf{Ground plane} — a simple depth-only pass with no clipping needed.
 \end{itemize}
 
-In the lighting pass, the fragment's world-space position (reconstructed from the G-buffer depth and \texttt{uInvView}) is transformed into light space and compared against the shadow map with a $3\times3$ PCF kernel for soft edges. Fragments outside the light frustum are treated as fully lit.
+In the lighting pass, the fragment's world-space position (reconstructed from the G-buffer depth and \texttt{uInvView}) is transformed into light space and compared against the shadow map with a 16-sample Poisson-disk PCF kernel for soft edges. The Poisson-disk pattern distributes samples circularly, avoiding the square penumbra artefact produced by regular grid kernels. Fragments outside the light frustum are treated as fully lit.
 
 \subsection{Phase 7 — Screen-Space Ambient Occlusion}
 \label{sec:ssao}
@@ -457,7 +457,7 @@ The following components are fully implemented and working:
     \item \textbf{Cylinder impostors} — bonds rendered as GPU ray-cast cylinders with tight NDC bounding box and axis-decomposed intersection.
     \item \textbf{Deferred shading} — geometry pass fills the G-buffer; lighting pass applies Blinn-Phong per screen pixel.
     \item \textbf{Ground plane} — flat quad below the molecule, integrated into the G-buffer pipeline.
-    \item \textbf{Shadow maps} — depth-only pass from the light's point of view with PCF ($3\times3$) soft shadows. Custom shadow shaders clip sphere and cylinder billboards to their correct silhouettes.
+    \item \textbf{Shadow maps} — depth-only pass from the light's point of view with 16-sample Poisson-disk PCF soft shadows. Custom shadow shaders clip sphere and cylinder billboards to their correct silhouettes.
     \item \textbf{SSAO} — 16-sample hemisphere kernel with noise-based rotation, box-blur smoothing, applied to the ambient term (eq.~\ref{eq:ssao}).
     \item \textbf{Composite pass} — intermediate RGB16F FBO with exposure control; clean separation between lighting and final output.
     \item \textbf{ImGui panel} — live controls for molecule selection, lighting, SSAO, camera FOV, exposure, and auto-rotation, with a stats overlay.
