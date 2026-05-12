@@ -392,7 +392,7 @@ A depth-only FBO ($2048\times2048$, \texttt{GL\_DEPTH\_COMPONENT24}) is rendered
     \item \textbf{Ground plane} — a simple depth-only pass with no clipping needed.
 \end{itemize}
 
-In the lighting pass, the fragment's world-space position (reconstructed from the G-buffer depth and \texttt{uInvView}) is transformed into light space and compared against the shadow map with a 16-sample Poisson-disk PCF kernel for soft edges. The Poisson-disk pattern distributes samples circularly, avoiding the square penumbra artefact produced by regular grid kernels. Fragments outside the light frustum are treated as fully lit.
+In the lighting pass, the fragment's world-space position (reconstructed from the G-buffer depth and \texttt{uInvView}) is transformed into light space and compared against the shadow map with a 16-sample Poisson-disk PCF kernel for soft edges. The Poisson-disk pattern distributes samples circularly, avoiding the square penumbra artefact produced by regular grid kernels. Fragments outside the light frustum are treated as fully lit. The paper describes the same approach in Section 4 (page 5), using 64 samples with an adaptive 8-sample early-out; our implementation currently uses 16 samples, which is acceptable for the molecule sizes targeted by the project.
 
 \subsection{Phase 7 — Screen-Space Ambient Occlusion}
 \label{sec:ssao}
@@ -411,7 +411,47 @@ A second fullscreen pass applies a $4\times4$ box blur to remove the high-freque
 where $\mathrm{ao}$ is clamped to $[0.4,\,1.0]$ to prevent fully black contact areas. The diffuse and specular terms are not affected by SSAO — only the ambient.
 
 % =========================================================================
-\subsection{Phase 8 — Composite Pass and ImGui Interface}
+\subsection{Phase 8 — Silhouette Pass, Composite, and ImGui Interface}
+
+\subsubsection{Silhouette and Crease Lines}
+\label{sec:silhouette}
+
+The paper proposes a non-photorealistic effect to make the molecule structure easier to read (Section 4, page 5):
+
+\begin{quote}
+\textit{``Silhouettes and creases can easily be detected by applying a Sobel edge detection filter to depth values and surface normals. The resulting gradient length can be considered as silhouette strength, which is finally used to blend the outline colour with the Phong lighting.''}
+\end{quote}
+
+We implemented this as a dedicated pass that sits between the lighting pass and the composite pass. It reads three textures: the lit scene from \texttt{sceneBuf}, and the depth and normal textures from the G-buffer. It writes the lit scene with dark outlines on top into a new \texttt{SceneBuffer outlineBuf}, which the composite pass then reads instead of \texttt{sceneBuf}.
+
+The shader applies the Sobel operator twice:
+
+\begin{itemize}
+    \item \textbf{On depth} — detects \emph{silhouette edges}, where the depth value changes sharply between one atom and another or between an atom and the background.
+    \item \textbf{On the normal map} — detects \emph{crease lines}, where the surface normal changes sharply even at similar depth (for example, between two atoms that touch).
+\end{itemize}
+
+The two gradient magnitudes are scaled to a roughly $[0, 1]$ range, the stronger of the two is taken, and the lit colour is blended toward black by that amount:
+
+\begin{lstlisting}[style=glslstyle, caption={silhouette.frag — Sobel edge detection on G-buffer.}]
+float edgeDepth  = sobelDepth (TexCoord, texel) * 20.0;
+float edgeNormal = sobelNormal(TexCoord, texel) * 1.5;
+float edge = clamp(max(edgeDepth, edgeNormal), 0.0, 1.0);
+
+vec3 sceneColor = texture(uScene, TexCoord).rgb;
+FragColor = vec4(mix(sceneColor, vec3(0.0), edge), 1.0);
+\end{lstlisting}
+
+The two scale factors (20.0 for depth, 1.5 for the normal map) bring each gradient into a comparable range and can be tuned to adjust outline thickness. The paper reports that this pass adds about 8\% of the total frame time on their hardware (page 6); on modern GPUs the cost is essentially zero because it is a single texture read per pixel with no heavy computation.
+
+The effect can be toggled at runtime through the new ``Outlines'' checkbox in the Post-Process section of the ImGui panel. Figure~\ref{fig:sobel} shows the difference between the lit-only output and the same view with silhouette and crease lines applied.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{sobel_contours.png}
+    \caption{The full pipeline including Sobel silhouette and crease lines. The dark outlines emphasise atom boundaries (silhouettes) and the contact points between touching atoms (crease lines), greatly improving spatial perception of the molecular structure, exactly as described in Section 4 of Sigg et al.}
+    \label{fig:sobel}
+\end{figure}
 
 \subsubsection{Composite Pass}
 
@@ -430,10 +470,10 @@ Dear ImGui is vendored into \texttt{external/imgui/} (core source files plus the
 \begin{itemize}
     \item \textbf{Molecule} — selectable list of all 11 included PDB structures; switching triggers a runtime reload (VBOs are re-uploaded with \texttt{glBufferData}, the ground plane and camera are reset to fit the new molecule).
     \item \textbf{Animation} — auto-rotate toggle and a ``Reset View'' button that restores the initial camera pose.
-    \item \textbf{Lighting} — light direction (three-axis slider), ambient strength, specular strength, shininess exponent.
+    \item \textbf{Lighting} — light direction (three-axis slider), ambient strength, specular strength, shininess exponent, and a shadows on/off checkbox that bypasses the PCF lookup in the lighting pass.
     \item \textbf{Ambient Occlusion} — enable/disable SSAO checkbox; AO radius slider, shown only when SSAO is active.
     \item \textbf{Camera} — vertical field of view.
-    \item \textbf{Post-Process} — exposure multiplier.
+    \item \textbf{Post-Process} — outlines on/off checkbox (Section~\ref{sec:silhouette}) and exposure multiplier.
     \item \textbf{Stats} — live atom count, bond count, and frame rate.
 \end{itemize}
 
@@ -459,6 +499,7 @@ The following components are fully implemented and working:
     \item \textbf{Ground plane} — flat quad below the molecule, integrated into the G-buffer pipeline.
     \item \textbf{Shadow maps} — depth-only pass from the light's point of view with 16-sample Poisson-disk PCF soft shadows. Custom shadow shaders clip sphere and cylinder billboards to their correct silhouettes.
     \item \textbf{SSAO} — 16-sample hemisphere kernel with noise-based rotation, box-blur smoothing, applied to the ambient term (eq.~\ref{eq:ssao}).
+    \item \textbf{Silhouette and crease lines} — Sobel edge detection on the G-buffer depth and normal textures, blended as dark outlines onto the lit scene. Implemented as described in Section 4 of Sigg et al.
     \item \textbf{Composite pass} — intermediate RGB16F FBO with exposure control; clean separation between lighting and final output.
     \item \textbf{ImGui panel} — live controls for molecule selection, lighting, SSAO, camera FOV, exposure, and auto-rotation, with a stats overlay.
     \item \textbf{Runtime molecule switching} — 11 PDB structures selectable at runtime; VBOs and ground plane update without restarting.
