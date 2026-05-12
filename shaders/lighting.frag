@@ -19,54 +19,63 @@ uniform float uAmbient;
 uniform float uSpecStrength;
 uniform float uShininess;
 
-// Shadow map
-uniform sampler2D uShadowMap;
-uniform mat4      uLightSpaceMatrix;
-uniform bool      uShadowsEnabled;
+// Shadow map (sampler2DShadow: hardware bilinear depth comparison).
+uniform sampler2DShadow uShadowMap;
+uniform mat4            uLightSpaceMatrix;
+uniform bool            uShadowsEnabled;
 
 // Blurred SSAO occlusion 
 uniform sampler2D uSSAOTex;
 
-// PCF: 16-sample Poisson-disk filter over the shadow map.
-// Returns a value in [0,1]; 0 = fully in shadow, 1 = fully lit.
-// A small bias prevents shadow acne caused by depth-map precision limits.
+// 64-sample adaptive PCF, following Sigg et al. (Section 4, page 5).
+// Returns a value in [0,1]: 0 = fully in shadow, 1 = fully lit.
 float shadowFactor(vec4 lightSpacePos)
 {
-    // Shadows disabled from the ImGui panel: every fragment is fully lit.
     if (!uShadowsEnabled) return 1.0;
 
-    // Perspective divide → NDC, then remap to [0,1] for texture lookup.
+    // Perspective divide, then remap NDC [-1,1] to texture range [0,1].
     vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
     proj = proj * 0.5 + 0.5;
 
-    // Outside the light frustum: treat as lit (border colour is white = 1.0).
+    // Outside the light frustum: border colour is 1.0 -> always lit.
     if (proj.z > 1.0) return 1.0;
 
-    float currentDepth = proj.z;
-    float bias         = 0.005;
-
-    // 16-sample Poisson-disk PCF (offsets spread in a circle so the
-    // soft penumbra edge is round rather than the square you get from
-    // a regular 3×3 grid kernel)
-    const vec2 poissonDisk[16] = vec2[](
-        vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
-        vec2(-0.09418410, -0.92938870), vec2( 0.34495938,  0.29387760),
-        vec2(-0.91588581,  0.45771432), vec2(-0.81544232, -0.87912464),
-        vec2(-0.38277543,  0.27676845), vec2( 0.97484398,  0.75648379),
-        vec2( 0.44323325, -0.97511554), vec2( 0.53742981, -0.47373420),
-        vec2(-0.26496911, -0.41893023), vec2( 0.79197514,  0.19090188),
-        vec2(-0.24188840,  0.99706507), vec2(-0.81409955,  0.91437590),
-        vec2( 0.19984126,  0.78641367), vec2( 0.14383161, -0.14100790)
-    );
-
+    // Reference depth for the hardware compare; bias hides acne.
+    float refDepth  = proj.z - 0.005;
     vec2  texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
-    float shadow    = 0.0;
-    for (int i = 0; i < 16; ++i) {
-        float pcfDepth = texture(uShadowMap,
-                                 proj.xy + poissonDisk[i] * texelSize * 1.5).r;
-        shadow += (currentDepth - bias > pcfDepth) ? 0.0 : 1.0;
+
+    // Samples are placed on a Vogel disk: every successive sample is rotated
+    // by the golden angle, giving an even circular spread without clumping.
+    // Each texture() call is a hardware-filtered depth compare because the
+    // shadow map is configured with GL_LINEAR + GL_COMPARE_REF_TO_TEXTURE.
+    //
+    // Adaptive strategy: take 8 samples first. If they all agree (every
+    // sample either fully lit or fully shadowed) the fragment is outside the
+    // penumbra and the remaining 56 lookups can be skipped.
+    const float GOLDEN_ANGLE = 2.39996323;
+    const float radius       = 1.5;
+
+    float shadow = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        float r     = sqrt((float(i) + 0.5) / 64.0);
+        float theta = float(i) * GOLDEN_ANGLE;
+        vec2  off   = r * vec2(cos(theta), sin(theta));
+        shadow += texture(uShadowMap,
+                          vec3(proj.xy + off * texelSize * radius, refDepth));
     }
-    return shadow / 16.0;
+
+    if (shadow == 0.0 || shadow == 8.0)
+        return shadow / 8.0;
+
+    // Inside the penumbra: take the remaining 56 samples.
+    for (int i = 8; i < 64; ++i) {
+        float r     = sqrt((float(i) + 0.5) / 64.0);
+        float theta = float(i) * GOLDEN_ANGLE;
+        vec2  off   = r * vec2(cos(theta), sin(theta));
+        shadow += texture(uShadowMap,
+                          vec3(proj.xy + off * texelSize * radius, refDepth));
+    }
+    return shadow / 64.0;
 }
 
 void main()

@@ -392,7 +392,27 @@ A depth-only FBO ($2048\times2048$, \texttt{GL\_DEPTH\_COMPONENT24}) is rendered
     \item \textbf{Ground plane} — a simple depth-only pass with no clipping needed.
 \end{itemize}
 
-In the lighting pass, the fragment's world-space position (reconstructed from the G-buffer depth and \texttt{uInvView}) is transformed into light space and compared against the shadow map with a 16-sample Poisson-disk PCF kernel for soft edges. The Poisson-disk pattern distributes samples circularly, avoiding the square penumbra artefact produced by regular grid kernels. Fragments outside the light frustum are treated as fully lit. The paper describes the same approach in Section 4 (page 5), using 64 samples with an adaptive 8-sample early-out; our implementation currently uses 16 samples, which is acceptable for the molecule sizes targeted by the project.
+In the lighting pass, the fragment's world-space position (reconstructed from the G-buffer depth and \texttt{uInvView}) is transformed into light space and compared against the shadow map. We follow the paper's prescription for shadow filtering exactly (Section 4, page 5):
+
+\begin{quote}
+\textit{``The small-scale molecule structures lead to highly complex shadow maps, thus requiring 64 shadow map samples to avoid visible noise inside the penumbra region. For better performance, the first 8 samples are used to adaptively determine whether the full 64 samples are required.''}
+\end{quote}
+
+The implementation uses two complementary techniques:
+
+\begin{itemize}
+    \item \textbf{Hardware PCF.} The shadow map is created with \texttt{GL\_LINEAR} filtering and \texttt{GL\_COMPARE\_REF\_TO\_TEXTURE} (\texttt{GL\_LEQUAL}), and the GLSL uniform is declared as \texttt{sampler2DShadow}. Every \texttt{texture()} call then performs a bilinear depth comparison in hardware and returns a smooth float in $[0, 1]$, instead of the binary $0/1$ produced by a manual depth comparison on \texttt{GL\_NEAREST}.
+    \item \textbf{Adaptive 64-sample Vogel disk.} Sample positions are generated inline using the Vogel disk formula (each successive sample is rotated by the golden angle, giving an even circular spread with no clumping). Eight samples are taken first; if they all agree (fully lit or fully shadowed) the fragment is outside the penumbra and the remaining 56 lookups are skipped. Otherwise the full 64 samples are taken.
+\end{itemize}
+
+Together these match the paper's approach and remove the visible step pattern that the previous 16-sample binary PCF showed on close inspection of the penumbra. Figure~\ref{fig:shadowsfinal} shows the final shadow quality on the GFP molecule (1GFL).
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{shadows_final.png}
+    \caption{Smooth penumbra produced by 64-sample adaptive hardware PCF on the GFP molecule (1GFL). The soft falloff along the bottom-left sphere is continuous, with no banding or stair-stepping. The 8-sample early-out keeps the cost low: the frame rate stays above 60~fps.}
+    \label{fig:shadowsfinal}
+\end{figure}
 
 \subsection{Phase 7 — Screen-Space Ambient Occlusion}
 \label{sec:ssao}
@@ -497,7 +517,7 @@ The following components are fully implemented and working:
     \item \textbf{Cylinder impostors} — bonds rendered as GPU ray-cast cylinders with tight NDC bounding box and axis-decomposed intersection.
     \item \textbf{Deferred shading} — geometry pass fills the G-buffer; lighting pass applies Blinn-Phong per screen pixel.
     \item \textbf{Ground plane} — flat quad below the molecule, integrated into the G-buffer pipeline.
-    \item \textbf{Shadow maps} — depth-only pass from the light's point of view with 16-sample Poisson-disk PCF soft shadows. Custom shadow shaders clip sphere and cylinder billboards to their correct silhouettes.
+    \item \textbf{Shadow maps} — depth-only pass from the light's point of view with 64-sample adaptive hardware PCF (\texttt{sampler2DShadow} + Vogel disk + 8-sample early-out), matching Section 4 of the paper. Custom shadow shaders clip sphere and cylinder billboards to their correct silhouettes.
     \item \textbf{SSAO} — 16-sample hemisphere kernel with noise-based rotation, box-blur smoothing, applied to the ambient term (eq.~\ref{eq:ssao}).
     \item \textbf{Silhouette and crease lines} — Sobel edge detection on the G-buffer depth and normal textures, blended as dark outlines onto the lit scene. Implemented as described in Section 4 of Sigg et al.
     \item \textbf{Composite pass} — intermediate RGB16F FBO with exposure control; clean separation between lighting and final output.
@@ -579,6 +599,55 @@ if (fbDirty && fbWidth > 0 && fbHeight > 0) {
 \end{lstlisting}
 
 \textbf{Lesson.} Any FBO or texture that must match the screen resolution must be recreated on every window resize, not only at startup.
+
+% =========================================================================
+\section{Anti-Aliasing in Deferred Rendering}
+% =========================================================================
+
+Edge quality is a known weak point of deferred rendering. The course slides list it explicitly among the limitations of the technique:
+
+\begin{quote}
+\textit{``Issues with Deferred Rendering: \dots no anti-aliasing.''}
+\end{quote}
+
+This section explains why classical anti-aliasing does not fit the architecture, why our ray-casting impostors already cover most of the problem, and which residual aliasing we did fix (shadows) versus which we deliberately did not (geometric silhouettes).
+
+\subsection{Why MSAA Does Not Work Here}
+
+Multi-Sample Anti-Aliasing renders each pixel at several sub-pixel positions and averages the result. In forward rendering this works well because shading happens once per sample on the geometry itself. In deferred rendering, however, shading is decoupled from geometry: the G-buffer must store \emph{every sample} of diffuse, normal, and depth before the lighting pass even runs. A $4\times$ MSAA G-buffer therefore costs four times the memory and four times the lighting work — enough to defeat the whole reason for using deferred shading. For this reason MSAA is not part of our pipeline, and is not part of the paper's pipeline either.
+
+\subsection{Ray-Casting Mitigates the Problem Mathematically}
+
+The aliasing that MSAA was invented to hide comes from tessellated polygons: a sphere approximated by triangles has straight edges, and a straight edge crossing a pixel grid produces a visible staircase. Our impostors do not have this problem. Each sphere and cylinder silhouette is computed by solving a quadratic equation per fragment (Section~\ref{sec:ndcbox}), so the edge of every primitive is mathematically defined, not approximated. The silhouette follows the smooth curve of the surface at fragment precision, not at polygon-edge precision.
+
+What remains is a single residual: the \texttt{discard} at the impostor boundary is still a binary per-pixel decision, so the outermost row of pixels along a silhouette is either fully inside or fully outside. This produces a one-pixel-wide staircase. Compared to polygon meshes the artefact is barely visible because the staircase follows the smooth curvature of the sphere rather than the straight edges of triangles.
+
+\subsection{Why We Did Not Add FXAA or SSAA}
+
+\textbf{FXAA} is a post-process spatial filter that detects high-contrast edges in the final image and blurs them. It is compatible with deferred rendering (it runs after composite) and is cheap. However, FXAA cannot distinguish between a \emph{good} analytically computed edge and a \emph{bad} polygon edge: it would blur our mathematically correct silhouettes equally, degrading work that the fragment shaders just spent GPU cycles computing. The cure would be worse than the disease.
+
+\textbf{SSAA} (Super-Sample Anti-Aliasing) renders the G-buffer at higher resolution and downsamples at composite. It is the correct solution for analytically defined surfaces because it preserves the mathematical silhouette. The cost, however, is prohibitive in our pipeline: a $1.5\times$ G-buffer roughly doubles the SSAO fill cost, and SSAO is already the most expensive pass. For molecules of a few thousand atoms the frame rate would drop below interactive.
+
+\textbf{TAA} (Temporal Anti-Aliasing) is the modern industry standard but requires motion vectors, jittered camera offsets, and a history buffer. The implementation cost is much higher than the scope of this project.
+
+\subsection{The Paper's Answer: Silhouette and Crease Lines}
+
+The paper does not implement geometric anti-aliasing at all. Instead, Sigg et al.\ improve \emph{perceptual} edge quality through a non-photorealistic effect: a Sobel edge detection filter applied to the G-buffer depth and normal textures, blended as dark outlines on top of the Phong lighting (Section 4, page 5). This addresses the perceptual problem — distinguishing one atom from another — without blurring any pixels. We implement exactly the same approach (Section~\ref{sec:silhouette}, Figure~\ref{fig:sobel}).
+
+\subsection{Shadow Aliasing: A Real Problem We Did Fix}
+
+The geometric aliasing on silhouettes is subtle. The aliasing inside the soft shadow penumbra, however, was clearly visible in our earlier implementation. With \texttt{GL\_NEAREST} filtering and a 16-sample binary PCF, the soft shadow could only take 17 discrete values, producing a stair-stepped band along the penumbra edge. Two changes together remove this:
+
+\begin{itemize}
+    \item \textbf{Hardware PCF.} Switching the shadow texture to \texttt{GL\_LINEAR} with \texttt{GL\_COMPARE\_REF\_TO\_TEXTURE} and declaring the GLSL uniform as \texttt{sampler2DShadow} makes every depth lookup a bilinear comparison, returning a smooth float in $[0, 1]$ rather than a binary $0$ or $1$.
+    \item \textbf{64-sample adaptive PCF.} Increasing the kernel from 16 to 64 well-distributed Vogel-disk samples removes the remaining noise on complex molecule shadow maps, exactly as the paper prescribes (Section 4, page 5). The 8-sample early-out keeps the frame cost low: most pixels still cost only 8 lookups.
+\end{itemize}
+
+Figure~\ref{fig:shadowsfinal} shows the result: the soft falloff along the shadow penumbra is now continuous, with no banding visible even at heavy zoom.
+
+\subsection{Summary}
+
+Our approach to edge quality in deferred rendering is therefore the combination of three deliberate choices: ray-casting impostors that give analytically correct silhouettes (so no MSAA/FXAA/SSAA needed for geometry); a Sobel silhouette-and-crease pass that handles the perceptual problem the paper highlights; and 64-sample adaptive hardware PCF that removes the genuine aliasing inside the soft shadow penumbra. The result is a deferred pipeline that, despite the architectural absence of MSAA, produces clean edges throughout the image.
 
 % =========================================================================
 \section{Conclusion}
