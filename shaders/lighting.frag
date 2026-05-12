@@ -19,11 +19,11 @@ uniform float uAmbient;
 uniform float uSpecStrength;
 uniform float uShininess;
 
-// Shadow map (commit 24)
+// Shadow map 
 uniform sampler2D uShadowMap;
 uniform mat4      uLightSpaceMatrix;
 
-// Blurred SSAO occlusion (commit 26)
+// Blurred SSAO occlusion 
 uniform sampler2D uSSAOTex;
 
 // PCF: 16-sample Poisson-disk filter over the shadow map.

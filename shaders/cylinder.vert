@@ -13,6 +13,7 @@ uniform mat4 uView;
 uniform mat4 uProj;
 uniform mat4 uModel;
 
+out vec2  vNDC;
 out vec3  vPosAEye;
 out vec3  vPosBEye;
 out float vRadius;
@@ -28,7 +29,7 @@ void main()
     float fx = uProj[0][0];   // focal length X
     float fy = uProj[1][1];   // focal length Y
 
-    // --- Tight NDC bounding box (replaces the old eye-space billboard) ---
+    // --- Tight NDC bounding box ---
     //
     // WHY: the old approach built a quad by moving the midpoint left/right by
     // a fixed 'side' vector in eye space. That is fast but slightly wrong: as
@@ -94,6 +95,7 @@ void main()
     float z_ndc   = clipMid.z / clipMid.w;
 
     gl_Position = vec4(x_ndc, y_ndc, z_ndc, 1.0);
+    vNDC = vec2(x_ndc, y_ndc);
 
     vPosAEye = eyeA;
     vPosBEye = eyeB;
