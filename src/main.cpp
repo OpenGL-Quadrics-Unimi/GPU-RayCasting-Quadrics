@@ -499,6 +499,7 @@ int main() {
     float ssaoRadius       = 1.0f;   // controlled via ImGui
     bool  ssaoEnabled      = true;
     bool  outlineEnabled   = true;   // Sobel silhouette and crease lines
+    bool  shadowsEnabled   = true;   // PCF shadow factor in the lighting pass
     bool  autoRotate       = false;
 
     // Available PDB molecules — added in commit #29
@@ -783,6 +784,7 @@ int main() {
         lightingShader.setFloat("uAmbient",      ambientStrength);
         lightingShader.setFloat("uSpecStrength", specStrength);
         lightingShader.setFloat("uShininess",    shininess);
+        lightingShader.setBool ("uShadowsEnabled", shadowsEnabled);
 
         screenQuad.drawQuad();
 
@@ -861,6 +863,7 @@ int main() {
         ImGui::SliderFloat("Ambient",    &ambientStrength, 0.0f,  1.0f,   "%.2f");
         ImGui::SliderFloat("Specular",   &specStrength,    0.0f,  1.0f,   "%.2f");
         ImGui::SliderFloat("Shininess",  &shininess,       1.0f,  128.0f, "%.0f");
+        ImGui::Checkbox   ("Shadows",    &shadowsEnabled);
 
         ImGui::SeparatorText("Ambient Occlusion");
         ImGui::Checkbox("Enable SSAO", &ssaoEnabled);

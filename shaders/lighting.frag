@@ -19,9 +19,10 @@ uniform float uAmbient;
 uniform float uSpecStrength;
 uniform float uShininess;
 
-// Shadow map 
+// Shadow map
 uniform sampler2D uShadowMap;
 uniform mat4      uLightSpaceMatrix;
+uniform bool      uShadowsEnabled;
 
 // Blurred SSAO occlusion 
 uniform sampler2D uSSAOTex;
@@ -31,6 +32,9 @@ uniform sampler2D uSSAOTex;
 // A small bias prevents shadow acne caused by depth-map precision limits.
 float shadowFactor(vec4 lightSpacePos)
 {
+    // Shadows disabled from the ImGui panel: every fragment is fully lit.
+    if (!uShadowsEnabled) return 1.0;
+
     // Perspective divide → NDC, then remap to [0,1] for texture lookup.
     vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
     proj = proj * 0.5 + 0.5;
