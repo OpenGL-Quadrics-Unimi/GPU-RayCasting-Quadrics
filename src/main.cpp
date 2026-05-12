@@ -81,7 +81,7 @@ struct GBuffer {
         glGenFramebuffers(1, &fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
-        // Diffuse colour — GL_RGB8 is enough (values are in [0,1])
+        // Diffuse colour. GL_RGB8 is enough (values are in [0,1])
         glGenTextures(1, &diffuseTex);
         glBindTexture(GL_TEXTURE_2D, diffuseTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0,
@@ -93,7 +93,7 @@ struct GBuffer {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, diffuseTex, 0);
 
-        //Eye-space normals — must be GL_RGB16F because normals are signed floats in [-1,1]
+        //Eye-space normals: must be GL_RGB16F because normals are signed floats in [-1,1]
         //GL_RGB8 cannot represent negative values without manual encoding, which would
         //cause visible banding in the lighting pass.
         glGenTextures(1, &normalTex);
@@ -107,7 +107,7 @@ struct GBuffer {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
                                GL_TEXTURE_2D, normalTex, 0);
 
-        //Depth;nearest filter — read exact depth values, not interpolated ones
+        //Depth;nearest filter (read exact depth values, not interpolated ones)
         glGenTextures(1, &depthTex);
         glBindTexture(GL_TEXTURE_2D, depthTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0,
@@ -291,9 +291,13 @@ int main() {
     ssaoBuf.create(fbWidth, fbHeight);
     ssaoBlurBuf.create(fbWidth, fbHeight);
 
-    // Scene buffer — lighting pass renders here; composite pass reads it.
+    // Scene buffer — lighting pass renders here; silhouette pass reads it.
     SceneBuffer sceneBuf;
     sceneBuf.create(fbWidth, fbHeight);
+
+    // Outline buffer — silhouette pass writes here; composite pass reads it.
+    SceneBuffer outlineBuf;
+    outlineBuf.create(fbWidth, fbHeight);
 
     //Hemisphere kernel-16 samples in tangent space, biased toward the surface
     std::uniform_real_distribution<float> randFloats(0.0f, 1.0f);
@@ -343,7 +347,7 @@ int main() {
     bonds.build(molecule.Atoms);
     std::cout << "Found " << bonds.List.size() << " bonds." << std::endl;
 
-    //PDB::load()-centres atoms at origin and computes BoundingRadius
+    //PDB::load() centres atoms at origin and computes BoundingRadius
     //orbit camera-frame the whole molecule
     camera.Target   = glm::vec3(0.0f);
     camera.Distance = molecule.BoundingRadius * 2.5f;
@@ -489,11 +493,13 @@ int main() {
 
     Shader lightingShader("../shaders/lighting.vert",
                           "../shaders/lighting.frag");
+    Shader silhouetteShader("../shaders/lighting.vert", "../shaders/silhouette.frag");
     Shader compositeShader("../shaders/lighting.vert", "../shaders/composite.frag");
-    float exposure    = 1.0f;   // controlled via ImGui
-    float ssaoRadius  = 1.0f;   // controlled via ImGui
-    bool  ssaoEnabled = true;
-    bool  autoRotate  = false;
+    float exposure         = 1.0f;   // controlled via ImGui
+    float ssaoRadius       = 1.0f;   // controlled via ImGui
+    bool  ssaoEnabled      = true;
+    bool  outlineEnabled   = true;   // Sobel silhouette and crease lines
+    bool  autoRotate       = false;
 
     // Available PDB molecules — added in commit #29
     const std::vector<std::string> pdbFiles = {
@@ -526,6 +532,7 @@ int main() {
             ssaoBuf.create(fbWidth, fbHeight);
             ssaoBlurBuf.create(fbWidth, fbHeight);
             sceneBuf.create(fbWidth, fbHeight);
+            outlineBuf.create(fbWidth, fbHeight);
             fbDirty = false;
         }
 
@@ -779,7 +786,37 @@ int main() {
 
         screenQuad.drawQuad();
 
+        //SILHOUETTE PASS
+        //Reads depth and normal from the G-buffer and the lit image from sceneBuf.
+        //Applies a Sobel edge filter to detect silhouettes (depth discontinuities)
+        //and crease lines (normal discontinuities). Writes the result to outlineBuf.
+        //If outlines are disabled we copy sceneBuf into outlineBuf unchanged.
+        glBindFramebuffer(GL_FRAMEBUFFER, outlineBuf.fbo);
+        glViewport(0, 0, fbWidth, fbHeight);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        if (outlineEnabled) {
+            silhouetteShader.use();
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, gbuf.depthTex);
+            silhouetteShader.setInt("gDepth", 0);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, gbuf.normalTex);
+            silhouetteShader.setInt("gNormal", 1);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, sceneBuf.tex);
+            silhouetteShader.setInt("uScene", 2);
+        } else {
+            compositeShader.use();
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, sceneBuf.tex);
+            compositeShader.setInt  ("uScene",    0);
+            compositeShader.setFloat("uExposure", 1.0f);
+        }
+        screenQuad.drawQuad();
+
         //COMPOSITE PASS
+        //Reads outlineBuf (scene with outlines) and applies tone mapping.
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
@@ -787,7 +824,7 @@ int main() {
 
         compositeShader.use();
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, sceneBuf.tex);
+        glBindTexture(GL_TEXTURE_2D, outlineBuf.tex);
         compositeShader.setInt  ("uScene",    0);
         compositeShader.setFloat("uExposure", exposure);
         screenQuad.drawQuad();
@@ -834,6 +871,7 @@ int main() {
         ImGui::SliderFloat("FOV", &camera.Fov, 10.0f, 120.0f, "%.0f deg");
 
         ImGui::SeparatorText("Post-Process");
+        ImGui::Checkbox("Outlines", &outlineEnabled);
         ImGui::SliderFloat("Exposure", &exposure, 0.1f, 3.0f, "%.2f");
 
         ImGui::SeparatorText("Stats");
@@ -867,6 +905,7 @@ shadowMap.destroy();
 ssaoBuf.destroy();
 ssaoBlurBuf.destroy();
 sceneBuf.destroy();
+outlineBuf.destroy();
 glDeleteTextures(1, &noiseTex);
 glfwTerminate();
 return 0;
