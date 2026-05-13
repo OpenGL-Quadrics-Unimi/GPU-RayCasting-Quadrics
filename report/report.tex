@@ -86,8 +86,7 @@ Molecular visualisation is a fundamental tool in structural biology and drug des
 
 This report describes our incremental implementation of the method proposed by Sigg et al.~\cite{sigg2006}, \textit{GPU-Based Ray-Casting of Quadratic Surfaces}. The method represents atoms and bonds as mathematical surfaces (quadrics) and computes their appearance entirely on the GPU through ray-casting. This avoids the cost of polygon tessellation and produces pixel-perfect silhouettes and normals at any zoom level.
 
-The project is written in C++17 using OpenGL~4.1, GLFW, GLAD, and GLM. It targets macOS compatibility (OpenGL 4.1 core profile). The implementation was built incrementally over 29 commits, each introducing one new feature, so the git history can serve as a step-by-step guide for students learning the same pipeline.
-
+The project is written in C++17 using OpenGL~4.1, GLFW, GLAD, and GLM. It targets macOS compatibility (OpenGL 4.1 core profile). 
 % =========================================================================
 \section{Background}
 % =========================================================================
