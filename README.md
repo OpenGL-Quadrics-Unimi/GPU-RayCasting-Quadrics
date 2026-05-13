@@ -188,7 +188,7 @@ report/
 
 ## Authors
 
-- **Giorgia Carboni** — project foundations, camera, PDB parser, bond detection, sphere and cylinder impostors (CPU geometry + shaders), tight NDC bounding box, ground plane, silhouette/crease-line pass, composite pass, ImGui panel, benchmark infrastructure (`GpuTimer`, `--bench`/`--bench-load` modes, analysis script)
+- **Giorgia Carboni** — camera, mouse control, PDB parser, bond detection, sphere and cylinder impostors (CPU geometry + shaders), tight NDC bounding box, ground plane, silhouette/crease-line pass, composite pass, ImGui panel, benchmark infrastructure 
 - **Betul Gul** — deferred shading pipeline, G-buffer setup, lighting pass, shadow maps, SSAO
 
 *Università degli Studi di Milano — Academic Year 2025–2026*
