@@ -152,9 +152,9 @@ The \texttt{Camera} class implements an orbit camera parametrised by yaw angle $
 \begin{equation}
     \mathbf{pos} = \mathbf{target} + d \begin{pmatrix} \cos\theta \sin\phi \\ \sin\theta \\ \cos\theta \cos\phi \end{pmatrix}
 \end{equation}
-The view matrix is computed with \texttt{glm::lookAt}. The projection matrix uses \texttt{glm::perspective} with a $45°$ vertical field of view, near plane $0.1$~\AA, and far plane $500$~\AA.
+The view matrix is computed with \texttt{glm::lookAt}. The projection matrix uses \texttt{glm::perspective} with a $45^\circ$ vertical field of view, near plane $0.1$~\AA, and far plane $500$~\AA.
 
-Mouse drag updates $\phi$ and $\theta$ (orbit); scroll updates $d$ (zoom). Pitch is clamped to $\pm89°$ to prevent the camera from flipping past the poles.
+Mouse drag updates $\phi$ and $\theta$ (orbit); scroll updates $d$ (zoom). Pitch is clamped to $\pm 89^\circ$ to prevent the camera from flipping past the poles.
 
 \subsection{Phase 2 — Molecule Loading}
 
@@ -574,7 +574,7 @@ All four corners of a billboard share the same clip-space $w$, so \texttt{vNDC} 
 
 \textbf{Fix.} The normal attachment was changed to \texttt{GL\_RGB16F}, a 16-bit signed floating-point format that can represent the full $[-1, 1]$ range without clamping:
 \begin{lstlisting}[style=cppstyle]
-// Normals: 16-bit float — required for signed values in [-1, 1]
+// Normals: 16-bit float, required for signed values in [-1, 1]
 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F,
              w, h, 0, GL_RGB, GL_FLOAT, nullptr);
 \end{lstlisting}
@@ -654,177 +654,106 @@ Our approach to edge quality in deferred rendering is therefore the combination 
 \section{Testing and Results}
 % =========================================================================
 
-This section describes how we measure the performance of the pipeline, which experiments we run, and where the raw data are stored. It documents the \emph{first round} of measurements, which were collected on the AMD machine. A second round on the Apple~M3 machine, together with the final tables and plots, will be added once the data are processed.
-
-\subsection{Goals}
-
-The testing phase has two goals. The first is to measure how the pipeline behaves on two very different Mac systems available for this project. The second is to compare the cost of each render pass with the budget reported by the original paper~\cite{sigg2006}, in terms of \emph{ratios} rather than absolute numbers (a direct comparison would not be meaningful, since their hardware is from 2006).
-
 \subsection{Hardware}
 
-The two test machines have very different GPU architectures, which is one of the most interesting parts of the comparison.
+The two test machines represent two distinct GPU architectures.
 
 \begin{itemize}
-    \item \textbf{MacBook Pro 2019} --- Intel CPU, AMD GPU, 32~GB RAM. \textit{(Exact CPU model, GPU model, and RAM speed: TODO, fill from} About This Mac\textit{.)} AMD GPUs use an \emph{immediate-mode} design typical of desktop GPUs: each draw call writes directly into the framebuffer, and the cost of a fragment-heavy pass scales mostly with the number of shaded pixels.
-    \item \textbf{MacBook Air with Apple~M3 chip}. \textit{(Exact GPU core count and RAM: TODO.)} The Apple GPU is a \emph{tile-based deferred renderer} (TBDR). The screen is split into small tiles, and the GPU reorders work so that most reads and writes stay on-chip. Fragment-heavy passes such as SSAO often show a different cost profile on this architecture.
+    \item \textbf{MacBook Pro 16,1 (2019)} --- 6-core Intel Core i7 at 2.6~GHz, AMD Radeon Pro 5300M (4~GB VRAM), 32~GB RAM. AMD GPUs use an \emph{immediate-mode} design: each fragment is shaded and written to the framebuffer immediately, so the cost of a fill-heavy pass scales with the number of shaded pixels.
+    \item \textbf{MacBook Air (Apple~M3, 2024)} --- Apple~M3 SoC, 8-core CPU (4P+4E), 10-core GPU, 16~GB unified memory. The Apple GPU is a \emph{tile-based deferred renderer} (TBDR). Geometry is sorted into screen tiles and most reads and writes stay on-chip, which substantially reduces bandwidth pressure on fragment-heavy passes.
 \end{itemize}
 
-The same binary runs on both machines, since the pipeline targets OpenGL~4.1 core. Any cost difference between the two machines can therefore be attributed to the GPU and its driver, not to the application code.
+The same binary (OpenGL~4.1 core) runs unmodified on both machines.
 
-\subsection{What is measured and how}
+\subsection{Measurement method}
 
-Two kinds of time are collected for every frame.
+Each render pass is bracketed by a pair of \texttt{GL\_TIME\_ELAPSED} queries (double-buffered so the CPU never stalls). A \texttt{std::chrono} timer measures the CPU application stage separately. A \texttt{--bench} flag automates the full run: v-sync is disabled, 60 warm-up frames are discarded, and 300 frames are recorded per molecule per configuration. The median of those 300 samples is used throughout. A separate \texttt{--bench-load} mode times PDB parsing and bond detection without opening a window.
 
-\begin{itemize}
-    \item \textbf{Per-pass GPU time.} Each render pass is wrapped between two \texttt{GL\_TIME\_ELAPSED} query objects. This gives the same kind of breakdown that profilers like NVIDIA NSIGHT or Xcode GPU Frame Capture provide, except that the values are written to a file by the application itself. Two queries are alternated frame by frame, so the CPU never has to wait for a result.
-    \item \textbf{CPU frame time.} A \texttt{std::chrono} timer covers all the work the CPU does for one frame (uniform updates, draw-call submission, buffer swap, event polling). This corresponds to the \emph{application stage} of the rendering pipeline.
-\end{itemize}
+\subsection{Per-pass breakdown and machine comparison}
 
-The six timed passes match the implementation: shadow, geometry, SSAO, lighting, silhouette, and composite. The ImGui pass is skipped in bench mode so its overhead does not enter the CPU number.
+Table~\ref{tab:compare_perpass} shows the cost of each pass for the headline molecule (1HHP, HIV protease, 758~atoms) at 1080p on both machines.
 
-\subsection{The bench script}
+\input{tables/compare_perpass.tex}
 
-A new command-line mode, \texttt{--bench}, automates the whole run. When the flag is set, the program:
+SSAO dominates on both machines (~44\% of the pass total), confirming that the 16-sample hemisphere kernel at full resolution is the bottleneck. The M3 is $4.5\times$ faster overall (340~FPS vs.\ 76~FPS). The largest per-pass speedup is on the lighting pass ($6.7\times$): the TBDR architecture keeps G-buffer textures in tile memory, so the bandwidth-bound lighting resolve benefits most from the on-chip reads.
 
-\begin{enumerate}
-    \item Disables v-sync, so the GPU is not capped at 60~FPS.
-    \item Iterates over all 11 PDB molecules in \texttt{data/}.
-    \item For each molecule, renders 60 warm-up frames (not recorded) followed by 300 measured frames with the camera at a fixed pose.
-    \item Writes one row per measured frame to a CSV file.
-    \item Closes the file and exits after the last molecule.
-\end{enumerate}
+\subsection{Scaling with molecule size}
 
-The CSV columns are: molecule label, atom and bond counts, frame index, CPU time, the six per-pass GPU times, the GPU total, and the framebuffer size in pixels. A small helper (\texttt{include/Core/GpuTimer.h}) encapsulates the double-buffered timer queries.
-
-\paragraph{Why 300 frames per molecule.} A single frame is not reliable. The first frames after a molecule change include cache misses and driver work, and background activity from the operating system causes occasional spikes. With 300 frames per molecule it is possible to compute the \emph{median}, which is robust to outliers, and to report the spread of the distribution rather than only the mean. The warm-up of 60 frames discards the initial transient before the recording starts.
-
-\subsection{Test plan and commands (first round)}
-
-The first round is run on the AMD machine and covers two families of tests.
-
-\paragraph{Resolution sweep.} Three window sizes, with the full pipeline enabled:
-\begin{lstlisting}[basicstyle=\ttfamily\small, frame=single]
-./QuadricRaycaster --bench --w 640  --h 360 --tag full_720p
-./QuadricRaycaster --bench --w 960  --h 540 --tag full_1080p
-./QuadricRaycaster --bench --w 1440 --h 900 --tag full_native
-\end{lstlisting}
-
-The window sizes are chosen so that the actual framebuffer (twice the window size on Retina displays) matches roughly 720p, 1080p, and the native panel resolution. The real pixel size is stored in the \texttt{fb\_w} and \texttt{fb\_h} columns of every CSV, so the exact value can be checked later.
-
-\paragraph{Feature ablation.} Four runs at the 1080p framebuffer size, each disabling one or more passes:
-\begin{lstlisting}[basicstyle=\ttfamily\small, frame=single]
-./QuadricRaycaster --bench --w 960 --h 540 --tag no_shadows  --no_shadows
-./QuadricRaycaster --bench --w 960 --h 540 --tag no_ssao     --no_ssao
-./QuadricRaycaster --bench --w 960 --h 540 --tag no_outlines --no_outlines
-./QuadricRaycaster --bench --w 960 --h 540 --tag bare \
-    --no_shadows --no_ssao --no_outlines
-\end{lstlisting}
-
-Comparing each ablation run against the full pipeline gives the marginal cost of one feature. The \texttt{bare} run sets the lower bound of the pipeline cost.
-
-\paragraph{Data location.} All CSV files of this first round are stored in \texttt{build/test\_results/} with the suffix \texttt{\_amd}, for example \texttt{bench\_full\_1080p\_amd.csv}. Each file contains 11 molecules $\times$ 300 frames $=$ 3300 measured rows plus one header row. The same commands will be repeated on the M3 machine and the resulting files will use the suffix \texttt{\_m3}.
-
-\subsection{Results (first round, AMD)}
-
-This subsection presents the data collected on the AMD machine. The numbers are medians over 300 frames per configuration, computed by the script \texttt{scripts/analyze\_bench.py}. The same script writes the LaTeX tables and the PNG plots, so the figures can be regenerated whenever new CSV files become available.
-
-\subsubsection{Per-pass breakdown}
-
-Table~\ref{tab:perpass_amd} shows the cost of each render pass for the headline molecule (1HHP, HIV protease, 758 atoms) at a 1080p framebuffer.
-
-\input{tables/perpass_amd.tex}
-
-Two facts stand out. First, \textbf{SSAO is by far the most expensive pass}, taking about 44\% of the GPU frame time. This is consistent with the limitation already noted in Section~\ref{sec:ssao}: a 16-sample hemisphere kernel at full resolution is heavy work for the fragment shader. Second, the shadow and composite passes together cost less than 1.2~ms, in line with the paper's claim that the silhouette and shadow stages add only a small fraction of the total frame budget.
-
-\subsubsection{Scaling with molecule size}
-
-Table~\ref{tab:scaling_amd} and Figure~\ref{fig:scaling_amd} show the GPU and CPU frame time for all 11 PDB structures at 1080p.
+Table~\ref{tab:scaling_amd} and Figure~\ref{fig:scaling_amd} show GPU and CPU frame time for all 11 molecules at 1080p on the AMD machine.
 
 \input{tables/scaling_amd.tex}
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.75\textwidth]{scaling_amd.png}
-    \caption{GPU frame time (median over 300 frames) as a function of atom count, on the AMD machine at 1080p. The horizontal axis is logarithmic to fit the very wide range of structure sizes.}
+    \caption{GPU frame time vs.\ atom count (AMD, 1080p, log scale). The plateau below 1000 atoms confirms the pipeline is fill-bound for small proteins. Even at 60k atoms the frame time stays below 25~ms.}
     \label{fig:scaling_amd}
 \end{figure}
-
-The plot shows a clear \emph{plateau} for molecules up to roughly 1000 atoms: the frame time stays around 13~ms regardless of the exact atom count. This confirms that the pipeline is \emph{fill-bound} for small proteins, since the cost is dominated by per-pixel work in the SSAO and lighting passes, not by the geometry pass. Above approximately 4000 atoms the geometry pass becomes visible in the totals; even at 60k atoms (1AON, 1FFK) the frame time remains below 25~ms, well above interactive rates.
-
-A small non-monotonic point is worth noting: 1MBN (1260 atoms) takes slightly longer than the larger 2LYZ (1102 atoms). The most likely explanation is that 1MBN occupies more screen area at the default camera framing, so the fill-bound passes process more fragments. The overall trend is still clearly monotonic with atom count.
-
-Figure~\ref{fig:pass_breakdown_amd} shows the same data broken down by pass.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.95\textwidth]{pass_breakdown_amd.png}
-    \caption{Per-pass GPU time across the 11 molecules at 1080p on the AMD machine. SSAO (green) and lighting (red) stay roughly constant in absolute terms because they depend on screen area, while geometry (orange) and shadow (blue) grow with the atom count.}
+    \caption{Per-pass breakdown across all 11 molecules (AMD, 1080p). SSAO and lighting are roughly constant because they depend on screen area; geometry and shadow grow with atom count.}
     \label{fig:pass_breakdown_amd}
 \end{figure}
 
-\subsubsection{Scaling with resolution}
+The frame time plateaus around 13~ms up to ~1000 atoms (fill-bound by SSAO and lighting), then rises gradually. At 60k atoms it reaches 24~ms (43~FPS), still fully interactive. Both machines follow the same shape; Figure~\ref{fig:compare_scaling} overlays them.
 
-Table~\ref{tab:resolution_amd} runs the same molecule (1HHP) at three framebuffer sizes.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth]{compare_scaling.png}
+    \caption{GPU frame time vs.\ atom count for both machines (1080p). The M3 curve sits consistently lower, reflecting the TBDR bandwidth advantage.}
+    \label{fig:compare_scaling}
+\end{figure}
 
-\input{tables/resolution_amd.tex}
+\subsection{Resolution scaling}
 
-The shadow pass stays at 0.57~ms across all three resolutions, because it renders to its own fixed-size shadow map ($2048\times2048$) and is therefore independent of screen resolution. All the other passes write to the framebuffer at full resolution, so their cost grows roughly linearly with the pixel count. SSAO is the most sensitive: from 720p to native (about 5.6 times more pixels) its cost grows from 2.69~ms to 14.55~ms, almost an exact linear relationship. The total frame time follows the same trend: 6.78~ms at 720p, 13.13~ms at 1080p, 31.05~ms at native (32~FPS), which is still interactive on the laptop's native panel.
+Table~\ref{tab:compare_resolution} shows the total GPU frame time for 1HHP at three resolutions.
 
-\subsubsection{Feature ablation}
+\input{tables/compare_resolution.tex}
 
-Table~\ref{tab:ablation_amd} measures the marginal cost of each post-processing feature by disabling it in isolation.
+Fill-bound passes (SSAO, lighting, silhouette) grow almost linearly with pixel count; the shadow pass, which renders to its own fixed-size $2048\times2048$ map, stays constant across resolutions. The AMD machine drops to 32~FPS at the native panel resolution; the M3 stays at 148~FPS.
 
-\input{tables/ablation_amd.tex}
+\subsection{Feature ablation}
 
-SSAO has by far the largest marginal cost: removing it alone saves 5.80~ms and lifts the frame rate from 76 to 137~FPS. Shadows cost 2.20~ms and outlines cost 1.03~ms. Disabling all three together produces the \emph{bare} configuration at 4.07~ms (245~FPS), which represents the unavoidable cost of the geometry, lighting, and composite stages. This makes SSAO the clear optimisation target if a faster interactive mode is ever needed (for example during the rotation of a very large molecule).
+Table~\ref{tab:compare_ablation} isolates the cost of each optional feature at 1080p.
 
-\subsubsection{CPU application stage: load times}
+\input{tables/compare_ablation.tex}
 
-The \texttt{--bench-load} flag runs a separate CPU-only benchmark. It does not open a window or use the GPU. For each molecule it runs one warm-up load followed by five measured loads, and records the median time for two operations: parsing the PDB file (\texttt{PDB::load}) and detecting covalent bonds (\texttt{Bonds::build}).
+SSAO is the most expensive optional feature on both machines. Disabling it adds roughly 5.8~ms on AMD and 0.75~ms on M3, pushing the AMD frame rate from 76 to 136~FPS. The \emph{bare} configuration (geometry + lighting + composite only) runs at 245~FPS (AMD) and 729~FPS (M3), setting the cost floor of the pipeline.
 
-Table~\ref{tab:load_amd} and Figure~\ref{fig:load_amd} show the results.
+\subsection{CPU load times}
+
+Figure~\ref{fig:load_amd} and Table~\ref{tab:load_amd} show PDB parse and bond-detection times (five measured runs, median).
 
 \input{tables/load_amd.tex}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.72\textwidth]{load_amd.png}
-    \caption{Bond detection time versus atom count on the AMD machine, log-log scale. The measured points (blue) lie almost exactly on the $O(N^2)$ reference line (orange dashed), confirming that the pairwise distance check scales quadratically with the number of atoms.}
+    \includegraphics[width=0.68\textwidth]{load_amd.png}
+    \caption{Bond detection time vs.\ atom count (AMD, log-log). Measured values (blue) follow the $O(N^2)$ reference line (dashed) closely, confirming the pairwise distance check is genuinely quadratic.}
     \label{fig:load_amd}
 \end{figure}
 
-The PDB parser scales roughly linearly with atom count and stays below 45~ms even for the largest structure. Bond detection is the bottleneck. The predicted column in Table~\ref{tab:load_amd} scales the bond time of the smallest molecule (1CRN, 327 atoms) by $(N / N_{1CRN})^2$; the close match with the measured values confirms that the pairwise distance check is genuinely $O(N^2)$.
-
-The practical impact is significant. For the eight molecules with fewer than 5000 atoms, the total load time stays below 100~ms, which is imperceptible to the user. For 1AON (GroEL, 58\,870 atoms) and 1FFK (Ribosome, 64\,281 atoms) bond detection takes 13.4 and 17.8~seconds respectively. The GPU then renders those molecules at 42~FPS, so the bottleneck on large structures is entirely in the CPU load stage, not in the render loop. This matches the limitation already noted in the Conclusion: a spatial acceleration structure (uniform grid or k-d tree) would reduce the bond detection to $O(N \log N)$ and make large-molecule loading interactive.
+Parsing scales linearly and stays below 45~ms. Bond detection is the bottleneck: for 1AON (58\,870 atoms) and 1FFK (64\,281 atoms) it takes 13.4 and 17.8~seconds respectively, matching the predicted $O(N^2)$ value to within 20\%. For all molecules under 5000 atoms the total load time is below 100~ms. A spatial index (uniform grid or k-d tree) would reduce this to $O(N \log N)$.
 
 \subsection{Discussion}
 
-The first round confirms three things about the implementation.
+Three conclusions follow from the data.
 
 \begin{enumerate}
-    \item \textbf{Geometry submission is cheap.} Even for a 60k-atom structure the geometry pass adds only a few milliseconds. The instanced-rendering design from Section~\ref{sec:cylcpu}, which sends one record per atom and reuses a shared quad, scales well to all the molecules in the test set.
-    \item \textbf{SSAO dominates the frame time for typical workloads.} For molecules up to a few thousand atoms, SSAO alone accounts for 40--50\% of the total GPU budget. A smaller kernel, a downsampled SSAO target with bilateral upsampling, or temporal accumulation would all have a high impact on overall performance.
-    \item \textbf{The pipeline scales as expected with pixel count.} Fill-bound passes grow almost linearly with the framebuffer area, while the shadow pass (with its own fixed-size target) stays constant. There are no surprising bottlenecks or super-linear effects.
+    \item \textbf{Geometry submission is cheap.} Instanced rendering keeps the geometry pass below a few milliseconds even at 60k atoms.
+    \item \textbf{SSAO is the main GPU cost.} It accounts for 40--50\% of the frame budget at 1080p. A half-resolution SSAO target with bilateral upsampling would have the largest impact on performance.
+    \item \textbf{The pipeline scales predictably.} Fill-bound passes grow linearly with framebuffer area; the shadow pass is resolution-independent. No super-linear effects were observed.
 \end{enumerate}
 
-A comparison with the paper~\cite{sigg2006} is meaningful only in relative terms, since the original hardware is from 2006. They report that the silhouette pass adds roughly 8\% to the total frame time. In our pipeline the silhouette pass takes around 14\% at 1080p. The two numbers are close enough to suggest that the cost ratios across passes are consistent with theirs, despite the very different absolute performance.
-
-\subsection{Next steps}
-
-Two pieces of work remain to complete this section:
-
-\begin{enumerate}
-    \item \textbf{M3 round.} Run the same set of commands on the MacBook Air (M3) and process the resulting CSV files with \texttt{python3 scripts/analyze\_bench.py --machine m3}. The script will produce the matching \texttt{*\_m3.tex} and \texttt{*\_m3.png} files automatically. A short side-by-side comparison will then be added at the end of this section, focusing on the architectural difference between the immediate-mode AMD GPU and the tile-based Apple GPU.
-    \item \textbf{Profiler captures.} Take one Xcode GPU Frame Capture and one Instruments Time Profiler screenshot per machine, as figures that complement the numerical tables.
-\end{enumerate}
-
-The infrastructure produced in this round (the \texttt{GpuTimer} helper, the \texttt{--bench} flag, the CSV format, and the analysis script) is shared between the two machines, so the second round only needs to execute the commands and rename the output files.
+Comparing with the paper~\cite{sigg2006} in relative terms: they report the silhouette pass at roughly 8\% of the frame budget; ours is ~14--17\%. The difference is plausible given that our Sobel filter runs at full screen resolution, whereas theirs used a dedicated edge-detection pass.
 
 % =========================================================================
 \section{Conclusion}
 % =========================================================================
 
-This project successfully implements the GPU ray-casting method of Sigg et al.~\cite{sigg2006} within a modern deferred shading pipeline. Sphere and cylinder impostors produce pixel-perfect silhouettes and surface normals at any zoom level, with no tessellation artefacts. The full pipeline — geometry pass, shadow map, SSAO, composite pass, and ImGui overlay — runs at 60~FPS on consumer hardware for molecules up to several thousand atoms, confirming that the impostor-based approach is viable for interactive molecular visualisation.
+This project successfully implements the GPU ray-casting method of Sigg et al.~\cite{sigg2006} within a modern deferred shading pipeline. Sphere and cylinder impostors produce pixel-perfect silhouettes and surface normals at any zoom level, with no tessellation artefacts. Benchmarks on two machines confirm that the full pipeline is interactive across the entire test set: on the AMD MBP 2019 it delivers 76~FPS at 1080p for a mid-size protein (758 atoms) and stays above 42~FPS even for a 64k-atom ribosome; on the Apple~M3 the same pipeline reaches 340~FPS and 140~FPS respectively, a $4.5\times$ advantage attributable to the tile-based GPU architecture.
 
 The most significant technical insight encountered during development was the numerical instability of the paper's parameter-space ray transformation under perspective at large zoom-out distances. Solving the intersection directly in eye space avoids the ill-conditioned matrix inversion and is mathematically equivalent for spheres. A second key insight was the importance of the tight NDC bounding box (eq.~\ref{eq:ndcbox}): without it, atom silhouettes are clipped at close range because the eye-space billboard expansion underestimates the true screen extent of the sphere.
 

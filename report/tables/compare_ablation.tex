@@ -1,0 +1,17 @@
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{lrrrr}
+        \toprule
+        Configuration & AMD (ms) & AMD FPS & M3 (ms) & M3 FPS \\
+        \midrule
+        Full pipeline & 13.13 & 76 & 2.94 & 340 \\
+        No shadows & 10.92 & 92 & 2.59 & 386 \\
+        No SSAO & 7.33 & 136 & 2.19 & 456 \\
+        No outlines & 12.10 & 83 & 2.79 & 359 \\
+        Bare & 4.07 & 246 & 1.37 & 729 \\
+        \bottomrule
+    \end{tabular}
+    \caption{Feature ablation on both machines at 1080p, molecule 1HHP HIV-PR.}
+    \label{tab:compare_ablation}
+\end{table}

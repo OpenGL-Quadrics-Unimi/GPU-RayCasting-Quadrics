@@ -18,6 +18,8 @@ import matplotlib.pyplot as plt
 # resolution / ablation sweeps. 1HHP is small enough to fit in every
 # resolution and large enough to exercise all passes.
 HEADLINE_MOL = "1HHP  HIV-PR"
+# Compact label used in captions (collapses internal whitespace).
+HEADLINE_LABEL = " ".join(HEADLINE_MOL.split())
 
 PASS_COLS = ["shadow_ms", "geometry_ms", "ssao_ms",
              "lighting_ms", "silhouette_ms", "composite_ms"]
@@ -83,7 +85,7 @@ def table_per_pass(df_full: pd.DataFrame, out: Path, machine: str) -> None:
     lines.append(f"        \\textbf{{Total}} & \\textbf{{{total:.2f}}} & 100.0 \\\\\n")
     lines.append(f"        FPS (= 1000/total) & \\multicolumn{{2}}{{r}}{{\\textbf{{{fps:.1f}}}}} \\\\\n")
     cap = (f"Per-pass GPU time on the {machine.upper()} machine, "
-           f"1080p framebuffer, molecule {HEADLINE_MOL.strip()} "
+           f"1080p framebuffer, molecule {HEADLINE_LABEL} "
            f"({int(row['atoms'])} atoms, {int(row['bonds'])} bonds). "
            f"Median over 300 frames.")
     lines.append(latex_footer(cap, f"tab:perpass_{machine}"))
@@ -125,7 +127,7 @@ def table_resolution(df_720, df_1080, df_native, out: Path, machine: str) -> Non
         lines.append(f"        {tag} & {fb} & " + " & ".join(cells) +
                      f" & {total:.2f} & {fps:.1f} \\\\\n")
     cap = (f"Resolution scaling on the {machine.upper()} machine, "
-           f"molecule {HEADLINE_MOL.strip()}. Per-pass median GPU time "
+           f"molecule {HEADLINE_LABEL}. Per-pass median GPU time "
            f"(ms) over 300 frames. Fill-bound passes (SSAO, lighting, silhouette) "
            f"scale with pixel count; geometry and shadow do not.")
     lines.append(latex_footer(cap, f"tab:resolution_{machine}"))
@@ -157,7 +159,7 @@ def table_ablation(csv_dir: Path, out: Path, machine: str) -> None:
         dstr = "0.00" if delta == 0.0 else f"{delta:+.2f}"
         lines.append(f"        {label} & {total:.2f} & {dstr} & {fps:.1f} \\\\\n")
     cap = (f"Feature ablation on the {machine.upper()} machine at 1080p, "
-           f"molecule {HEADLINE_MOL.strip()}. $\\Delta$ is the change in "
+           f"molecule {HEADLINE_LABEL}. $\\Delta$ is the change in "
            f"GPU frame time relative to the full pipeline. A negative value "
            f"means the configuration is faster.")
     lines.append(latex_footer(cap, f"tab:ablation_{machine}"))
@@ -258,26 +260,102 @@ def plot_pass_breakdown(df_full: pd.DataFrame, out: Path, machine: str) -> None:
     plt.close(fig)
     print(f"  wrote {out.relative_to(Path.cwd())}")
 
+# Comparison tables and plots (both machines together)
+
+def table_comparison_perpass(amd_dir: Path, m3_dir: Path, out: Path) -> None:
+    """Side-by-side per-pass table for both machines at 1080p, HEADLINE_MOL."""
+    amd = median_per_molecule(load_csv(amd_dir / "bench_full_1080p_amd.csv")).loc[HEADLINE_MOL]
+    m3  = median_per_molecule(load_csv(m3_dir  / "bench_full_1080p_m3.csv" )).loc[HEADLINE_MOL]
+    lines = [latex_header("", "", "lrrrr")]
+    lines.append("        Pass & AMD (ms) & M3 (ms) & M3 share (\\%) & Speedup \\\\\n")
+    lines.append("        \\midrule\n")
+    m3_total = sum(m3[c] for c in PASS_COLS)
+    for c in PASS_COLS:
+        pct   = 100.0 * m3[c] / m3_total
+        speedup = amd[c] / m3[c]
+        lines.append(f"        {PASS_LABELS[c]} & {amd[c]:.2f} & {m3[c]:.2f}"
+                     f" & {pct:.1f} & {speedup:.1f}$\\times$ \\\\\n")
+    lines.append("        \\midrule\n")
+    amd_t, m3_t = amd["gpu_total_ms"], m3["gpu_total_ms"]
+    lines.append(f"        \\textbf{{Total}} & \\textbf{{{amd_t:.2f}}} & \\textbf{{{m3_t:.2f}}}"
+                 f" & 100.0 & {amd_t/m3_t:.1f}$\\times$ \\\\\n")
+    lines.append(f"        FPS & {1000/amd_t:.0f} & {1000/m3_t:.0f} & & \\\\\n")
+    cap = (f"Per-pass GPU time comparison at 1080p, molecule {HEADLINE_LABEL}. "
+           f"Median over 300 frames. Speedup is AMD time divided by M3 time.")
+    lines.append(latex_footer(cap, "tab:compare_perpass"))
+    write_tex(out, "".join(lines))
+
+def table_comparison_resolution(amd_dir: Path, m3_dir: Path, out: Path) -> None:
+    """Resolution scaling comparison for both machines, HEADLINE_MOL."""
+    tags = [("720p", "bench_full_720p"), ("1080p", "bench_full_1080p"), ("native", "bench_full_native")]
+    lines = [latex_header("", "", "lrrrr")]
+    lines.append("        Resolution & FB pixels & AMD (ms) & M3 (ms) & Speedup \\\\\n")
+    lines.append("        \\midrule\n")
+    for tag, stem in tags:
+        a_row = median_per_molecule(load_csv(amd_dir / f"{stem}_amd.csv")).loc[HEADLINE_MOL]
+        m_row = median_per_molecule(load_csv(m3_dir  / f"{stem}_m3.csv" )).loc[HEADLINE_MOL]
+        fb = f"{int(a_row['fb_w'])}$\\times${int(a_row['fb_h'])}"
+        a, m = a_row["gpu_total_ms"], m_row["gpu_total_ms"]
+        lines.append(f"        {tag} & {fb} & {a:.2f} & {m:.2f} & {a/m:.1f}$\\times$ \\\\\n")
+    cap = (f"Resolution scaling comparison, molecule {HEADLINE_LABEL}. "
+           f"GPU total frame time (ms, median over 300 frames).")
+    lines.append(latex_footer(cap, "tab:compare_resolution"))
+    write_tex(out, "".join(lines))
+
+def table_comparison_ablation(amd_dir: Path, m3_dir: Path, out: Path) -> None:
+    """Feature ablation comparison for both machines at 1080p, HEADLINE_MOL."""
+    configs = [
+        ("Full pipeline",  "bench_full_1080p"),
+        ("No shadows",     "bench_no_shadows"),
+        ("No SSAO",        "bench_no_ssao"),
+        ("No outlines",    "bench_no_outlines"),
+        ("Bare",           "bench_bare"),
+    ]
+    lines = [latex_header("", "", "lrrrr")]
+    lines.append("        Configuration & AMD (ms) & AMD FPS & M3 (ms) & M3 FPS \\\\\n")
+    lines.append("        \\midrule\n")
+    for label, stem in configs:
+        a = median_per_molecule(load_csv(amd_dir / f"{stem}_amd.csv")).loc[HEADLINE_MOL, "gpu_total_ms"]
+        m = median_per_molecule(load_csv(m3_dir  / f"{stem}_m3.csv" )).loc[HEADLINE_MOL, "gpu_total_ms"]
+        lines.append(f"        {label} & {a:.2f} & {1000/a:.0f} & {m:.2f} & {1000/m:.0f} \\\\\n")
+    cap = (f"Feature ablation on both machines at 1080p, molecule {HEADLINE_LABEL}.")
+    lines.append(latex_footer(cap, "tab:compare_ablation"))
+    write_tex(out, "".join(lines))
+
+def plot_comparison_scaling(amd_dir: Path, m3_dir: Path, out: Path) -> None:
+    """GPU total time vs atom count, both machines on the same axes."""
+    amd = median_per_molecule(load_csv(amd_dir / "bench_full_1080p_amd.csv")).sort_values("atoms")
+    m3  = median_per_molecule(load_csv(m3_dir  / "bench_full_1080p_m3.csv" )).sort_values("atoms")
+    fig, ax = plt.subplots(figsize=(6.5, 4.0))
+    ax.plot(amd["atoms"], amd["gpu_total_ms"], marker="o", color="C0",
+            linewidth=1.5, label="AMD (2019 MBP)")
+    ax.plot(m3["atoms"],  m3["gpu_total_ms"],  marker="s", color="C1",
+            linewidth=1.5, label="Apple M3 (MacBook Air)")
+    for label, row in amd.iterrows():
+        ax.annotate(label.split()[0], (row["atoms"], row["gpu_total_ms"]),
+                    fontsize=6, xytext=(4, 2), textcoords="offset points", color="C0")
+    ax.set_xscale("log")
+    ax.set_xlabel("Atom count (log scale)")
+    ax.set_ylabel("GPU frame time (ms, median)")
+    ax.set_title("Molecule scaling comparison (1080p)")
+    ax.legend(fontsize=8, frameon=False)
+    ax.grid(True, which="both", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"  wrote {out.relative_to(Path.cwd())}")
+
 # Main
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="amd", help="amd | m3 (default: amd)")
-    args = ap.parse_args()
-    machine = args.machine.lower()
-
-    root = Path(__file__).resolve().parent.parent
-
+def _resolve_dir(root: Path, machine: str) -> Path:
     candidates = [
         root / "bench_data" / machine.upper(),
         root / "build" / "test_results" / machine.upper(),
         root / "build" / "test_results",
     ]
-    csv_dir = next((d for d in candidates if d.is_dir()), candidates[0])
-    tab_dir = root / "report" / "tables"
-    plot_dir = root / "report" / "plots"
-    tab_dir.mkdir(parents=True, exist_ok=True)
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    return next((d for d in candidates if d.is_dir()), candidates[0])
 
+def run_single(machine: str, root: Path, tab_dir: Path, plot_dir: Path) -> None:
+    csv_dir = _resolve_dir(root, machine)
     print(f"Reading CSVs from {csv_dir}")
     df_720    = load_csv(csv_dir / f"bench_full_720p_{machine}.csv")
     df_1080   = load_csv(csv_dir / f"bench_full_1080p_{machine}.csv")
@@ -287,19 +365,46 @@ def main():
     table_per_pass        (df_1080, tab_dir / f"perpass_{machine}.tex",   machine)
     table_molecule_scaling(df_1080, tab_dir / f"scaling_{machine}.tex",   machine)
     table_resolution      (df_720, df_1080, df_native,
-                                    tab_dir / f"resolution_{machine}.tex", machine)
+                           tab_dir / f"resolution_{machine}.tex",         machine)
     table_ablation        (csv_dir, tab_dir / f"ablation_{machine}.tex",  machine)
 
     load_csv_path = csv_dir / f"bench_load_{machine}.csv"
     if load_csv_path.exists():
-        table_load_times(load_csv_path, tab_dir  / f"load_{machine}.tex",       machine)
-        plot_load_times (load_csv_path, plot_dir / f"load_{machine}.png",        machine)
+        table_load_times(load_csv_path, tab_dir  / f"load_{machine}.tex", machine)
+        plot_load_times (load_csv_path, plot_dir / f"load_{machine}.png",  machine)
     else:
         print(f"  skipping load tables (no {load_csv_path.name})")
 
     print("Writing plots:")
-    plot_scaling      (df_1080, plot_dir / f"scaling_{machine}.png",         machine)
+    plot_scaling       (df_1080, plot_dir / f"scaling_{machine}.png",       machine)
     plot_pass_breakdown(df_1080, plot_dir / f"pass_breakdown_{machine}.png", machine)
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--machine", default="amd",
+                    help="amd | m3 | both  (default: amd)")
+    args = ap.parse_args()
+    machine = args.machine.lower()
+
+    root     = Path(__file__).resolve().parent.parent
+    tab_dir  = root / "report" / "tables"
+    plot_dir = root / "report" / "plots"
+    tab_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    if machine == "both":
+        run_single("amd", root, tab_dir, plot_dir)
+        run_single("m3",  root, tab_dir, plot_dir)
+
+        amd_dir = _resolve_dir(root, "amd")
+        m3_dir  = _resolve_dir(root, "m3")
+        print("Writing comparison tables and plots:")
+        table_comparison_perpass   (amd_dir, m3_dir, tab_dir  / "compare_perpass.tex")
+        table_comparison_resolution(amd_dir, m3_dir, tab_dir  / "compare_resolution.tex")
+        table_comparison_ablation  (amd_dir, m3_dir, tab_dir  / "compare_ablation.tex")
+        plot_comparison_scaling    (amd_dir, m3_dir, plot_dir / "compare_scaling.png")
+    else:
+        run_single(machine, root, tab_dir, plot_dir)
 
     print("Done.")
 
