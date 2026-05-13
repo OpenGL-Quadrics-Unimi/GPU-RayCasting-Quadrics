@@ -1,0 +1,15 @@
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{lrrrrrrrrr}
+        \toprule
+        Res. & FB pixels & Shadow map & Geometry (G-buffer) & SSAO + blur & Lighting & Silhouette (Sobel) & Composite & Total & FPS \\
+        \midrule
+        720p & 1280x720 & 0.57 & 0.76 & 2.69 & 1.63 & 0.86 & 0.28 & 6.78 & 147.5 \\
+        1080p & 1920x1080 & 0.57 & 1.57 & 5.82 & 2.68 & 1.88 & 0.62 & 13.13 & 76.2 \\
+        native & 2880x1800 & 0.57 & 4.03 & 14.55 & 5.71 & 4.63 & 1.53 & 31.05 & 32.2 \\
+        \bottomrule
+    \end{tabular}
+    \caption{Resolution scaling on the AMD machine, molecule 1HHP  HIV-PR. Per-pass median GPU time (ms) over 300 frames. Fill-bound passes (SSAO, lighting, silhouette) scale with pixel count; geometry and shadow do not.}
+    \label{tab:resolution_amd}
+\end{table}

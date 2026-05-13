@@ -1,0 +1,21 @@
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{lrr}
+        \toprule
+        Pass & GPU time (ms) & Share (\%) \\
+        \midrule
+        Shadow map & 0.57 & 4.3 \\
+        Geometry (G-buffer) & 1.57 & 12.0 \\
+        SSAO + blur & 5.82 & 44.3 \\
+        Lighting & 2.68 & 20.4 \\
+        Silhouette (Sobel) & 1.88 & 14.3 \\
+        Composite & 0.62 & 4.7 \\
+        \midrule
+        \textbf{Total} & \textbf{13.13} & 100.0 \\
+        FPS (= 1000/total) & \multicolumn{2}{r}{\textbf{76.2}} \\
+        \bottomrule
+    \end{tabular}
+    \caption{Per-pass GPU time on the AMD machine, 1080p framebuffer, molecule 1HHP  HIV-PR (758 atoms, 771 bonds). Median over 300 frames.}
+    \label{tab:perpass_amd}
+\end{table}

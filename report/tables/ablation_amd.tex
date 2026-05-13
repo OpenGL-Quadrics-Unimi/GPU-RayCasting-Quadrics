@@ -1,0 +1,17 @@
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{lrrr}
+        \toprule
+        Configuration & GPU total (ms) & $\Delta$ vs full (ms) & FPS \\
+        \midrule
+        Full pipeline & 13.13 & 0.00 & 76.2 \\
+        No shadows & 10.92 & -2.20 & 91.5 \\
+        No SSAO & 7.33 & -5.80 & 136.5 \\
+        No outlines & 12.10 & -1.03 & 82.6 \\
+        Bare (none) & 4.07 & -9.05 & 245.5 \\
+        \bottomrule
+    \end{tabular}
+    \caption{Feature ablation on the AMD machine at 1080p, molecule 1HHP  HIV-PR. $\Delta$ is the change in GPU frame time relative to the full pipeline. A negative value means the configuration is faster.}
+    \label{tab:ablation_amd}
+\end{table}
