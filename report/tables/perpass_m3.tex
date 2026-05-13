@@ -1,0 +1,21 @@
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{lrr}
+        \toprule
+        Pass & GPU time (ms) & Share (\%) \\
+        \midrule
+        Shadow map & 0.34 & 11.4 \\
+        Geometry (G-buffer) & 0.36 & 12.1 \\
+        SSAO + blur & 1.20 & 40.6 \\
+        Lighting & 0.40 & 13.5 \\
+        Silhouette (Sobel) & 0.49 & 16.7 \\
+        Composite & 0.17 & 5.7 \\
+        \midrule
+        \textbf{Total} & \textbf{2.95} & 100.0 \\
+        FPS (= 1000/total) & \multicolumn{2}{r}{\textbf{340.2}} \\
+        \bottomrule
+    \end{tabular}
+    \caption{Per-pass GPU time on the M3 machine, 1080p framebuffer, molecule 1HHP  HIV-PR (758 atoms, 771 bonds). Median over 300 frames.}
+    \label{tab:perpass_m3}
+\end{table}

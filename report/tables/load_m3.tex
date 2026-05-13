@@ -1,0 +1,23 @@
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{lrrrrrr}
+        \toprule
+        Molecule & Atoms & Bonds & Parse (ms) & Bond detect (ms) & Predicted $O(N^2)$ (ms) & Total (ms) \\
+        \midrule
+        1CRN & 327 & 337 & 1.35 & 3.94 & 3.94 & 5.29 \\
+        1UBQ & 660 & 608 & 1.69 & 13.03 & 16.06 & 14.73 \\
+        1HHP & 758 & 771 & 1.98 & 17.15 & 21.18 & 19.13 \\
+        2INS & 964 & 810 & 2.97 & 27.76 & 34.26 & 30.73 \\
+        2LYZ & 1102 & 1037 & 2.94 & 36.31 & 44.77 & 39.26 \\
+        1MBN & 1260 & 1298 & 3.25 & 46.55 & 58.53 & 49.80 \\
+        1GFL & 3950 & 3738 & 8.22 & 464.58 & 575.17 & 472.80 \\
+        3HHB & 4612 & 4704 & 9.85 & 633.05 & 784.12 & 642.90 \\
+        4HHB & 4779 & 4633 & 10.61 & 679.34 & 841.93 & 689.95 \\
+        1AON & 58870 & 59307 & 114.33 & 103632.00 & 127758.69 & 103746.00 \\
+        1FFK & 64281 & 67866 & 121.66 & 124065.00 & 152323.75 & 124186.00 \\
+        \bottomrule
+    \end{tabular}
+    \caption{PDB parse and bond detection times on the M3 machine (median of 5 runs). The predicted $O(N^2)$ column scales the bond detection time of the smallest molecule (1CRN) by $(N/N_{1CRN})^2$. The close match confirms the quadratic growth of the pairwise distance check.}
+    \label{tab:load_m3}
+\end{table}

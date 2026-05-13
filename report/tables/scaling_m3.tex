@@ -1,0 +1,23 @@
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{lrrrrr}
+        \toprule
+        Molecule & Atoms & Bonds & GPU (ms) & CPU (ms) & FPS \\
+        \midrule
+        1CRN & 327 & 337 & 2.93 & 4.49 & 340.9 \\
+        1UBQ & 660 & 608 & 2.87 & 4.44 & 348.5 \\
+        1HHP & 758 & 771 & 2.94 & 4.51 & 340.2 \\
+        2INS & 964 & 810 & 2.85 & 4.38 & 351.0 \\
+        2LYZ & 1102 & 1037 & 2.99 & 4.52 & 334.2 \\
+        1MBN & 1260 & 1298 & 3.23 & 4.80 & 309.5 \\
+        1GFL & 3950 & 3738 & 3.18 & 5.00 & 314.6 \\
+        3HHB & 4612 & 4704 & 3.47 & 5.33 & 288.4 \\
+        4HHB & 4779 & 4633 & 3.38 & 5.24 & 295.8 \\
+        1AON & 58870 & 59307 & 5.21 & 7.07 & 191.9 \\
+        1FFK & 64281 & 67866 & 5.28 & 7.16 & 189.5 \\
+        \bottomrule
+    \end{tabular}
+    \caption{Scaling with molecule size on the M3 machine at 1080p. Median GPU and CPU frame time over 300 frames per molecule.}
+    \label{tab:scaling_m3}
+\end{table}
