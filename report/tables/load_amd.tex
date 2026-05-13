@@ -1,0 +1,23 @@
+\begin{table}[H]
+    \centering
+    \small
+    \begin{tabular}{lrrrrrr}
+        \toprule
+        Molecule & Atoms & Bonds & Parse (ms) & Bond detect (ms) & Predicted $O(N^2)$ (ms) & Total (ms) \\
+        \midrule
+        1CRN & 327 & 337 & 0.44 & 0.51 & 0.51 & 0.95 \\
+        1UBQ & 660 & 608 & 0.76 & 2.00 & 2.08 & 2.76 \\
+        1HHP & 758 & 771 & 0.80 & 2.39 & 2.74 & 3.19 \\
+        2INS & 964 & 810 & 1.10 & 3.56 & 4.43 & 4.66 \\
+        2LYZ & 1102 & 1037 & 1.08 & 5.06 & 5.79 & 6.14 \\
+        1MBN & 1260 & 1298 & 1.33 & 7.28 & 7.57 & 8.62 \\
+        1GFL & 3950 & 3738 & 3.04 & 62.10 & 74.43 & 65.13 \\
+        3HHB & 4612 & 4704 & 3.55 & 87.46 & 101.46 & 91.01 \\
+        4HHB & 4779 & 4633 & 3.96 & 94.39 & 108.94 & 98.34 \\
+        1AON & 58870 & 59307 & 37.97 & 13416.80 & 16531.59 & 13454.70 \\
+        1FFK & 64281 & 67866 & 42.76 & 17757.00 & 19710.24 & 17799.70 \\
+        \bottomrule
+    \end{tabular}
+    \caption{PDB parse and bond detection times on the AMD machine (median of 5 runs). The predicted $O(N^2)$ column scales the bond detection time of the smallest molecule (1CRN) by $(N/N_{1CRN})^2$. The close match confirms the quadratic growth of the pairwise distance check.}
+    \label{tab:load_amd}
+\end{table}

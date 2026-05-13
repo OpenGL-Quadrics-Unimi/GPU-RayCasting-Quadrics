@@ -249,16 +249,81 @@ int main(int argc, char** argv) {
     bool benchShadows   = true;
     bool benchSSAO      = true;
     bool benchOutlines  = true;
+    bool benchLoadMode  = false;
     std::string benchTag = "default";
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if      (a == "--bench")        benchMode = true;
-        else if (a == "--w" && i+1<argc)        benchWinW = std::stoi(argv[++i]);
-        else if (a == "--h" && i+1<argc)        benchWinH = std::stoi(argv[++i]);
-        else if (a == "--no_shadows")   benchShadows  = false;
-        else if (a == "--no_ssao")      benchSSAO     = false;
-        else if (a == "--no_outlines")  benchOutlines = false;
-        else if (a == "--tag" && i+1<argc)      benchTag = argv[++i];
+        if      (a == "--bench")             benchMode     = true;
+        else if (a == "--bench-load")        benchLoadMode = true;
+        else if (a == "--w" && i+1<argc)     benchWinW     = std::stoi(argv[++i]);
+        else if (a == "--h" && i+1<argc)     benchWinH     = std::stoi(argv[++i]);
+        else if (a == "--no_shadows")        benchShadows  = false;
+        else if (a == "--no_ssao")           benchSSAO     = false;
+        else if (a == "--no_outlines")       benchOutlines = false;
+        else if (a == "--tag" && i+1<argc)   benchTag      = argv[++i];
+    }
+
+    // Load benchmark. Runs before OpenGL so no window or GPU context is needed.
+    // Each molecule is loaded REPS times; the median time is written to the CSV.
+    // The first iteration is a warm up so the file is already in the OS cache
+    // when the measured iterations start.
+    if (benchLoadMode) {
+        const int REPS    = 5;
+        const int WARMUP  = 1;
+        const std::vector<std::string> loadFiles = {
+            "../data/1crn.pdb", "../data/1ubq.pdb", "../data/1mbn.pdb",
+            "../data/1aon.pdb", "../data/1ffk.pdb", "../data/1gfl.pdb",
+            "../data/1hhp.pdb", "../data/2ins.pdb", "../data/2lyz.pdb",
+            "../data/3hhb.pdb", "../data/4hhb.pdb"
+        };
+        const std::vector<std::string> loadLabels = {
+            "1CRN", "1UBQ", "1MBN", "1AON", "1FFK",
+            "1GFL", "1HHP", "2INS", "2LYZ", "3HHB", "4HHB"
+        };
+
+        std::string outName = "bench_load_" + benchTag + ".csv";
+        std::ofstream out(outName);
+        out << "molecule,atoms,bonds,parse_ms,bond_ms,total_ms\n";
+        std::cout << "Load benchmark. Output: " << outName << "\n";
+
+        auto median = [](std::vector<double> v) {
+            std::sort(v.begin(), v.end());
+            return v[v.size() / 2];
+        };
+
+        for (size_t m = 0; m < loadFiles.size(); ++m) {
+            std::vector<double> parseTimes, bondTimes;
+            int natoms = 0, nbonds = 0;
+            for (int r = 0; r < WARMUP + REPS; ++r) {
+                PDB mol;
+                auto t0 = std::chrono::high_resolution_clock::now();
+                mol.load(loadFiles[m]);
+                auto t1 = std::chrono::high_resolution_clock::now();
+                Bonds b;
+                auto t2 = std::chrono::high_resolution_clock::now();
+                b.build(mol.Atoms);
+                auto t3 = std::chrono::high_resolution_clock::now();
+                if (r >= WARMUP) {
+                    parseTimes.push_back(
+                        std::chrono::duration<double,std::milli>(t1-t0).count());
+                    bondTimes.push_back(
+                        std::chrono::duration<double,std::milli>(t3-t2).count());
+                    natoms = static_cast<int>(mol.Atoms.size());
+                    nbonds = static_cast<int>(b.List.size());
+                }
+            }
+            double pm = median(parseTimes);
+            double bm = median(bondTimes);
+            out << loadLabels[m] << ',' << natoms << ',' << nbonds << ','
+                << pm << ',' << bm << ',' << (pm + bm) << '\n';
+            std::cout << "  " << loadLabels[m]
+                      << "  atoms=" << natoms
+                      << "  parse=" << pm << " ms"
+                      << "  bonds=" << bm << " ms\n";
+        }
+        out.close();
+        std::cout << "Done.\n";
+        return 0;
     }
 
     //Initialize GLFW

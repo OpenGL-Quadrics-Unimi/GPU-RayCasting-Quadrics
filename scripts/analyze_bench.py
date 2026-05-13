@@ -163,6 +163,62 @@ def table_ablation(csv_dir: Path, out: Path, machine: str) -> None:
     lines.append(latex_footer(cap, f"tab:ablation_{machine}"))
     write_tex(out, "".join(lines))
 
+# Table 5: PDB parse and bond detection time vs atom count.
+# Also computes the theoretical O(N^2) predicted bond time relative to
+# the smallest molecule, so the table makes the scaling argument explicit.
+def table_load_times(load_csv_path: Path, out: Path, machine: str) -> None:
+    df = pd.read_csv(load_csv_path).sort_values("atoms").reset_index(drop=True)
+
+    # Reference point for the O(N^2) prediction: smallest molecule (first row).
+    ref_atoms = df["atoms"].iloc[0]
+    ref_bond  = df["bond_ms"].iloc[0]
+
+    lines = [latex_header("", "", "lrrrrrr")]
+    lines.append("        Molecule & Atoms & Bonds & "
+                 "Parse (ms) & Bond detect (ms) & "
+                 "Predicted $O(N^2)$ (ms) & Total (ms) \\\\\n")
+    lines.append("        \\midrule\n")
+    for _, row in df.iterrows():
+        predicted = ref_bond * (row["atoms"] / ref_atoms) ** 2
+        lines.append(
+            f"        {row['molecule']} & {int(row['atoms'])} & {int(row['bonds'])} "
+            f"& {row['parse_ms']:.2f} & {row['bond_ms']:.2f} "
+            f"& {predicted:.2f} & {row['total_ms']:.2f} \\\\\n"
+        )
+    cap = (f"PDB parse and bond detection times on the {machine.upper()} machine "
+           f"(median of 5 runs). The predicted $O(N^2)$ column scales the "
+           f"bond detection time of the smallest molecule (1CRN) by $(N/N_{{1CRN}})^2$. "
+           f"The close match confirms the quadratic growth of the pairwise distance check.")
+    lines.append(latex_footer(cap, f"tab:load_{machine}"))
+    write_tex(out, "".join(lines))
+
+def plot_load_times(load_csv_path: Path, out: Path, machine: str) -> None:
+    """Log-log plot of bond detection time vs atom count with O(N^2) reference line."""
+    df = pd.read_csv(load_csv_path).sort_values("atoms")
+    atoms = df["atoms"].values
+    bond  = df["bond_ms"].values
+
+    # O(N^2) reference line anchored at the smallest molecule.
+    ref_a, ref_b = atoms[0], bond[0]
+    ref_line = ref_b * (atoms / ref_a) ** 2
+
+    fig, ax = plt.subplots(figsize=(6.0, 4.0))
+    ax.loglog(atoms, bond,     marker="o", color="C0", linewidth=1.5, label="Measured")
+    ax.loglog(atoms, ref_line, linestyle="--", color="C1", linewidth=1.2,
+              label=r"$O(N^2)$ reference")
+    for _, row in df.iterrows():
+        ax.annotate(row["molecule"], (row["atoms"], row["bond_ms"]),
+                    fontsize=7, xytext=(4, 4), textcoords="offset points")
+    ax.set_xlabel("Atom count (log scale)")
+    ax.set_ylabel("Bond detection time (ms, log scale)")
+    ax.set_title(f"Bond detection scaling ({machine.upper()})")
+    ax.legend(fontsize=8, frameon=False)
+    ax.grid(True, which="both", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"  wrote {out.relative_to(Path.cwd())}")
+
 # Plots
 def plot_scaling(df_full: pd.DataFrame, out: Path, machine: str) -> None:
     """GPU total frame time vs atom count, 11 molecules at 1080p."""
@@ -234,8 +290,15 @@ def main():
                                     tab_dir / f"resolution_{machine}.tex", machine)
     table_ablation        (csv_dir, tab_dir / f"ablation_{machine}.tex",  machine)
 
+    load_csv_path = csv_dir / f"bench_load_{machine}.csv"
+    if load_csv_path.exists():
+        table_load_times(load_csv_path, tab_dir  / f"load_{machine}.tex",       machine)
+        plot_load_times (load_csv_path, plot_dir / f"load_{machine}.png",        machine)
+    else:
+        print(f"  skipping load tables (no {load_csv_path.name})")
+
     print("Writing plots:")
-    plot_scaling      (df_1080, plot_dir / f"scaling_{machine}.png",       machine)
+    plot_scaling      (df_1080, plot_dir / f"scaling_{machine}.png",         machine)
     plot_pass_breakdown(df_1080, plot_dir / f"pass_breakdown_{machine}.png", machine)
 
     print("Done.")

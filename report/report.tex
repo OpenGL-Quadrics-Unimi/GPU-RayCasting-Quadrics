@@ -778,6 +778,25 @@ Table~\ref{tab:ablation_amd} measures the marginal cost of each post-processing 
 
 SSAO has by far the largest marginal cost: removing it alone saves 5.80~ms and lifts the frame rate from 76 to 137~FPS. Shadows cost 2.20~ms and outlines cost 1.03~ms. Disabling all three together produces the \emph{bare} configuration at 4.07~ms (245~FPS), which represents the unavoidable cost of the geometry, lighting, and composite stages. This makes SSAO the clear optimisation target if a faster interactive mode is ever needed (for example during the rotation of a very large molecule).
 
+\subsubsection{CPU application stage: load times}
+
+The \texttt{--bench-load} flag runs a separate CPU-only benchmark. It does not open a window or use the GPU. For each molecule it runs one warm-up load followed by five measured loads, and records the median time for two operations: parsing the PDB file (\texttt{PDB::load}) and detecting covalent bonds (\texttt{Bonds::build}).
+
+Table~\ref{tab:load_amd} and Figure~\ref{fig:load_amd} show the results.
+
+\input{tables/load_amd.tex}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth]{load_amd.png}
+    \caption{Bond detection time versus atom count on the AMD machine, log-log scale. The measured points (blue) lie almost exactly on the $O(N^2)$ reference line (orange dashed), confirming that the pairwise distance check scales quadratically with the number of atoms.}
+    \label{fig:load_amd}
+\end{figure}
+
+The PDB parser scales roughly linearly with atom count and stays below 45~ms even for the largest structure. Bond detection is the bottleneck. The predicted column in Table~\ref{tab:load_amd} scales the bond time of the smallest molecule (1CRN, 327 atoms) by $(N / N_{1CRN})^2$; the close match with the measured values confirms that the pairwise distance check is genuinely $O(N^2)$.
+
+The practical impact is significant. For the eight molecules with fewer than 5000 atoms, the total load time stays below 100~ms, which is imperceptible to the user. For 1AON (GroEL, 58\,870 atoms) and 1FFK (Ribosome, 64\,281 atoms) bond detection takes 13.4 and 17.8~seconds respectively. The GPU then renders those molecules at 42~FPS, so the bottleneck on large structures is entirely in the CPU load stage, not in the render loop. This matches the limitation already noted in the Conclusion: a spatial acceleration structure (uniform grid or k-d tree) would reduce the bond detection to $O(N \log N)$ and make large-molecule loading interactive.
+
 \subsection{Discussion}
 
 The first round confirms three things about the implementation.
