@@ -5,12 +5,15 @@
 #include "Core/Renderer.h"
 #include "Core/Shader.h"
 #include "Core/Camera.h"
+#include "Core/GpuTimer.h"
 #include "Geometry/PDB.h"
 #include "Geometry/Bonds.h"
 
 #include <iostream>
+#include <fstream>
 #include <random>
 #include <cmath>
+#include <chrono>
 #include <string>
 
 #include "imgui.h"
@@ -237,7 +240,27 @@ struct ShadowMap {
     }
 };
 
-int main() {
+int main(int argc, char** argv) {
+    // Benchmark mode: runs all molecules with a fixed camera and writes
+    // per pass GPU timings plus CPU time to a CSV file. See README.
+    bool benchMode      = false;
+    int  benchWinW      = 1280;
+    int  benchWinH      = 720;
+    bool benchShadows   = true;
+    bool benchSSAO      = true;
+    bool benchOutlines  = true;
+    std::string benchTag = "default";
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if      (a == "--bench")        benchMode = true;
+        else if (a == "--w" && i+1<argc)        benchWinW = std::stoi(argv[++i]);
+        else if (a == "--h" && i+1<argc)        benchWinH = std::stoi(argv[++i]);
+        else if (a == "--no_shadows")   benchShadows  = false;
+        else if (a == "--no_ssao")      benchSSAO     = false;
+        else if (a == "--no_outlines")  benchOutlines = false;
+        else if (a == "--tag" && i+1<argc)      benchTag = argv[++i];
+    }
+
     //Initialize GLFW
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -248,7 +271,9 @@ int main() {
 #endif
 
     //Create window
-    GLFWwindow* window = glfwCreateWindow(800, 600, "Quadrics", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(benchMode ? benchWinW : 800,
+                                          benchMode ? benchWinH : 600,
+                                          "Quadrics", NULL, NULL);
     if (window == NULL) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -341,16 +366,36 @@ int main() {
     //Depth test-closer atoms draw in front of farther ones
     glEnable(GL_DEPTH_TEST);
 
+    // One GPU timer per pass.
+    GpuTimer tShadow, tGeometry, tSSAO, tLighting, tSilhouette, tComposite;
+    tShadow.create();    tGeometry.create();  tSSAO.create();
+    tLighting.create();  tSilhouette.create(); tComposite.create();
+
     //Load molecule from PDB file
     //camera distance is set from the bounding r so the whole molecule always fits in view
+    // Wall-clock timings reported in the ImGui Stats panel; the O(N^2) bond
+    // detection dominates the load cost on large structures.
+    double loadTimeMs      = 0.0;
+    double bondBuildTimeMs = 0.0;
+
     PDB molecule;
-    if (!molecule.load("../data/1crn.pdb"))
-        std::cerr << "ERROR: could not load PDB file" << std::endl;
-    else
-        std::cout << "Loaded " << molecule.Atoms.size() << " atoms." << std::endl;
+    {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        if (!molecule.load("../data/1crn.pdb"))
+            std::cerr << "ERROR: could not load PDB file" << std::endl;
+        else
+            std::cout << "Loaded " << molecule.Atoms.size() << " atoms." << std::endl;
+        auto t1 = std::chrono::high_resolution_clock::now();
+        loadTimeMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
 
     Bonds bonds;
-    bonds.build(molecule.Atoms);
+    {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        bonds.build(molecule.Atoms);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        bondBuildTimeMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
     std::cout << "Found " << bonds.List.size() << " bonds." << std::endl;
 
     //PDB::load() centres atoms at origin and computes BoundingRadius
@@ -526,9 +571,33 @@ int main() {
 
     Renderer screenQuad;
     screenQuad.initQuad();
+
+    // Bench mode setup. Disable vsync, force features, open CSV file.
+    std::ofstream benchCsv;
+    int  benchFrame  = 0;
+    const int BENCH_WARMUP   = 60;
+    const int BENCH_MEASURED = 300;
+    if (benchMode) {
+        glfwSwapInterval(0);
+        shadowsEnabled  = benchShadows;
+        ssaoEnabled     = benchSSAO;
+        outlineEnabled  = benchOutlines;
+        autoRotate      = false;
+        selectedMolecule = 0;
+        benchCsv.open("bench_" + benchTag + ".csv");
+        benchCsv << "molecule,atoms,bonds,frame,cpu_ms,"
+                    "shadow_ms,geometry_ms,ssao_ms,"
+                    "lighting_ms,silhouette_ms,composite_ms,"
+                    "gpu_total_ms,fb_w,fb_h\n";
+        std::cout << "Bench mode on. Output: bench_" << benchTag << ".csv\n";
+    }
+
     //Render loop
     while (!glfwWindowShouldClose(window)) {
         processInput(window);
+
+        // CPU time covers all work on this thread for the current frame.
+        auto cpuT0 = std::chrono::high_resolution_clock::now();
 
         if (autoRotate)
             camera.Yaw += 0.005f;
@@ -545,8 +614,16 @@ int main() {
 
         //Reload molecule when the user picks a different one from the ImGui panel
         if (selectedMolecule != loadedMolecule) {
-            if (molecule.load(pdbFiles[selectedMolecule])) {
+            auto tLoad0 = std::chrono::high_resolution_clock::now();
+            bool ok = molecule.load(pdbFiles[selectedMolecule]);
+            auto tLoad1 = std::chrono::high_resolution_clock::now();
+            if (ok) {
+                loadTimeMs = std::chrono::duration<double, std::milli>(tLoad1 - tLoad0).count();
+
+                auto tBuild0 = std::chrono::high_resolution_clock::now();
                 bonds.build(molecule.Atoms);
+                auto tBuild1 = std::chrono::high_resolution_clock::now();
+                bondBuildTimeMs = std::chrono::duration<double, std::milli>(tBuild1 - tBuild0).count();
 
                 atomInstances.clear();
                 for (const Atom& a : molecule.Atoms) {
@@ -622,6 +699,9 @@ int main() {
 
         glm::mat4 model = glm::mat4(1.0f);   // shared identity model for all geometry
 
+        // Shadow pass. Skipped when shadows are off, so ablation reflects the real cost.
+        tShadow.begin();
+        if (shadowsEnabled) {
         glBindFramebuffer(GL_FRAMEBUFFER, shadowMap.fbo);
         glViewport(0, 0, shadowMap.size, shadowMap.size);
         glClear(GL_DEPTH_BUFFER_BIT);
@@ -656,8 +736,11 @@ int main() {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
         glBindVertexArray(0);
+        } // shadowsEnabled
+        tShadow.end();
 
         //GEOMETRY PASS
+        tGeometry.begin();
         //Spheres rendered into the G-buffer-ray tracing
         //Screen stays black until lighting pass
         glBindFramebuffer(GL_FRAMEBUFFER, gbuf.fbo);
@@ -701,8 +784,10 @@ int main() {
         glBindVertexArray(groundVAO);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
+        tGeometry.end();
 
         //SSAO PASS
+        tSSAO.begin();
         if (ssaoEnabled) {
             //Compute per-fragment ambient occlusion into ssaoBuf-R32F
             glBindFramebuffer(GL_FRAMEBUFFER, ssaoBuf.fbo);
@@ -745,8 +830,10 @@ int main() {
             glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
         }
+        tSSAO.end();
 
         //LIGHTING PASS
+        tLighting.begin();
         glBindFramebuffer(GL_FRAMEBUFFER, sceneBuf.fbo);
         glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
@@ -793,12 +880,14 @@ int main() {
         lightingShader.setBool ("uShadowsEnabled", shadowsEnabled);
 
         screenQuad.drawQuad();
+        tLighting.end();
 
         //SILHOUETTE PASS
         //Reads depth and normal from the G-buffer and the lit image from sceneBuf.
         //Applies a Sobel edge filter to detect silhouettes (depth discontinuities)
         //and crease lines (normal discontinuities). Writes the result to outlineBuf.
         //If outlines are disabled we copy sceneBuf into outlineBuf unchanged.
+        tSilhouette.begin();
         glBindFramebuffer(GL_FRAMEBUFFER, outlineBuf.fbo);
         glViewport(0, 0, fbWidth, fbHeight);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -822,9 +911,11 @@ int main() {
             compositeShader.setFloat("uExposure", 1.0f);
         }
         screenQuad.drawQuad();
+        tSilhouette.end();
 
         //COMPOSITE PASS
         //Reads outlineBuf (scene with outlines) and applies tone mapping.
+        tComposite.begin();
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, fbWidth, fbHeight);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
@@ -836,11 +927,13 @@ int main() {
         compositeShader.setInt  ("uScene",    0);
         compositeShader.setFloat("uExposure", exposure);
         screenQuad.drawQuad();
+        tComposite.end();
 
         //Depth test re-enabled
         glEnable(GL_DEPTH_TEST);
 
-        //IMGUI PASS
+        //IMGUI PASS (skipped in bench mode to keep CPU measurements clean)
+        if (!benchMode) {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -884,17 +977,58 @@ int main() {
         ImGui::SliderFloat("Exposure", &exposure, 0.1f, 3.0f, "%.2f");
 
         ImGui::SeparatorText("Stats");
-        ImGui::Text("Atoms:  %d", (int)atomInstances.size());
-        ImGui::Text("Bonds:  %d", (int)bondInstances.size());
-        ImGui::Text("FPS:    %.1f", ImGui::GetIO().Framerate);
+        ImGui::Text("Atoms:       %d", (int)atomInstances.size());
+        ImGui::Text("Bonds:       %d", (int)bondInstances.size());
+        ImGui::Text("FPS:         %.1f",   ImGui::GetIO().Framerate);
+        ImGui::Text("PDB load:    %.2f ms", loadTimeMs);
+        ImGui::Text("Bond build:  %.2f ms", bondBuildTimeMs);
 
         ImGui::End();
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        } // !benchMode
 
         glfwSwapBuffers(window);
         glfwPollEvents();
+
+        // CPU time stops here so it covers the whole frame work.
+        auto cpuT1 = std::chrono::high_resolution_clock::now();
+        double cpuFrameMs = std::chrono::duration<double, std::milli>(cpuT1 - cpuT0).count();
+
+        // Per pass GPU times. Reads return zero on the first frame.
+        double msShadow     = tShadow.readMs();
+        double msGeometry   = tGeometry.readMs();
+        double msSSAO       = tSSAO.readMs();
+        double msLighting   = tLighting.readMs();
+        double msSilhouette = tSilhouette.readMs();
+        double msComposite  = tComposite.readMs();
+        double msGpuTotal   = msShadow + msGeometry + msSSAO
+                            + msLighting + msSilhouette + msComposite;
+
+        if (benchMode) {
+            if (benchFrame >= BENCH_WARMUP &&
+                benchFrame <  BENCH_WARMUP + BENCH_MEASURED) {
+                benchCsv << pdbLabels[loadedMolecule] << ','
+                         << atomInstances.size() << ',' << bondInstances.size() << ','
+                         << (benchFrame - BENCH_WARMUP) << ',' << cpuFrameMs << ','
+                         << msShadow     << ',' << msGeometry   << ',' << msSSAO       << ','
+                         << msLighting   << ',' << msSilhouette << ',' << msComposite  << ','
+                         << msGpuTotal   << ',' << fbWidth      << ',' << fbHeight     << '\n';
+            }
+            ++benchFrame;
+            if (benchFrame >= BENCH_WARMUP + BENCH_MEASURED) {
+                std::cout << "Done: " << pdbLabels[loadedMolecule] << "\n";
+                benchFrame = 0;
+                int next = loadedMolecule + 1;
+                if (next >= (int)pdbFiles.size()) {
+                    benchCsv.close();
+                    glfwSetWindowShouldClose(window, GLFW_TRUE);
+                } else {
+                    selectedMolecule = next;
+                }
+            }
+        }
 }
         
 
@@ -911,6 +1045,8 @@ glDeleteBuffers(1, &cornerVBO);
 glDeleteBuffers(1, &groundVBO);
 gbuf.destroy();
 shadowMap.destroy();
+tShadow.destroy();    tGeometry.destroy();   tSSAO.destroy();
+tLighting.destroy();  tSilhouette.destroy(); tComposite.destroy();
 ssaoBuf.destroy();
 ssaoBlurBuf.destroy();
 sceneBuf.destroy();
