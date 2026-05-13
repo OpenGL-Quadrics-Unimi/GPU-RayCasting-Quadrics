@@ -87,6 +87,7 @@ Molecular visualisation is a fundamental tool in structural biology and drug des
 This report describes our incremental implementation of the method proposed by Sigg et al.~\cite{sigg2006}, \textit{GPU-Based Ray-Casting of Quadratic Surfaces}. The method represents atoms and bonds as mathematical surfaces (quadrics) and computes their appearance entirely on the GPU through ray-casting. This avoids the cost of polygon tessellation and produces pixel-perfect silhouettes and normals at any zoom level.
 
 The project is written in C++17 using OpenGL~4.1, GLFW, GLAD, and GLM. It targets macOS compatibility (OpenGL 4.1 core profile). 
+
 % =========================================================================
 \section{Background}
 % =========================================================================
@@ -506,6 +507,7 @@ Mouse and scroll callbacks check \texttt{ImGui::GetIO().WantCaptureMouse} before
     \label{fig:imgui}
 \end{figure}
 
+
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.48\textwidth]{first_quadric.png}
@@ -584,17 +586,9 @@ if (fbDirty && fbWidth > 0 && fbHeight > 0) {
 \section{Anti-Aliasing in Deferred Rendering}
 % =========================================================================
 
-Edge quality is a known weak point of deferred rendering. The course slides list it explicitly among the limitations of the technique:
+Edge quality is a known weak point of deferred rendering. Classical approaches like \textbf{Multi-Sample Anti-Aliasing (MSAA)} render each pixel at several sub-pixel positions and average the result. While this is efficient in forward rendering where shading occurs per sample directly on the geometry, deferred shading decouples geometry from lighting. Consequently, applying MSAA requires the G-buffer to store \emph{every sample} of diffuse colour, normal, and depth before the lighting pass executes. A $4\times$ MSAA setup therefore multiplies both memory bandwidth and lighting computation by four, defeating the primary architectural advantage of deferred shading. For this reason, MSAA is excluded from both our pipeline and the original paper's method.
 
-\begin{quote}
-\textit{``Issues with Deferred Rendering: \dots no anti-aliasing.''}
-\end{quote}
-
-This section explains why classical anti-aliasing does not fit the architecture, why our ray-casting impostors already cover most of the problem, and which residual aliasing we did fix (shadows) versus which we deliberately did not (geometric silhouettes).
-
-\subsection{Why MSAA Does Not Work Here}
-
-Multi-Sample Anti-Aliasing renders each pixel at several sub-pixel positions and averages the result. In forward rendering this works well because shading happens once per sample on the geometry itself. In deferred rendering, however, shading is decoupled from geometry: the G-buffer must store \emph{every sample} of diffuse, normal, and depth before the lighting pass even runs. A $4\times$ MSAA G-buffer therefore costs four times the memory and four times the lighting work — enough to defeat the whole reason for using deferred shading. For this reason MSAA is not part of our pipeline, and is not part of the paper's pipeline either.
+The remainder of this section details how our ray-casting impostors mathematically mitigate most of the aliasing problem without relying on MSAA, outlining which residual artifacts were actively resolved (shadows) and which were deliberately retained (geometric silhouettes).
 
 \subsection{Ray-Casting Mitigates the Problem Mathematically}
 
@@ -742,11 +736,11 @@ Several aspects of the current implementation have known limitations:
     \item \textbf{Bond detection complexity.} The pairwise distance check is $O(N^2)$ in the number of atoms. This is acceptable for proteins of a few thousand atoms but causes a noticeable delay when loading large structures such as GroEL ($\approx 58\,000$ atoms) or the ribosome ($\approx 100\,000$ atoms). A spatial acceleration structure (e.g.\ a uniform grid or k-d tree) would reduce this to $O(N \log N)$.
     \item \textbf{SSAO noise.} With 16 hemisphere samples the raw occlusion signal is noisy; the $4\times4$ box blur reduces but does not fully eliminate the artefact. A larger kernel, importance-weighted sampling, or temporal accumulation would give a cleaner result.
     \item \textbf{Single light source.} The shading model supports only one directional light. Point lights, area lights, or image-based lighting are not implemented.
-    \item \textbf{No transparency.} All surfaces are opaque. Selecting or highlighting individual atoms — a common requirement in molecular visualisation software — would require order-independent transparency.
-\end{itemize}
 
+\end{itemize}
 \paragraph{Future work.}
 Natural extensions include: a ball-and-stick / space-fill representation toggle; temporal SSAO accumulation for a noise-free signal at low sample counts; per-atom selection and highlighting; and a spatial acceleration structure to make large-molecule loading interactive. The deferred pipeline and composite pass provide a clean foundation for any of these additions without restructuring the existing render loop.
+\clearpage
 
 % =========================================================================
 \begin{thebibliography}{9}
