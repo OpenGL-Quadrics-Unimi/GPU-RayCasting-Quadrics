@@ -506,26 +506,6 @@ Mouse and scroll callbacks check \texttt{ImGui::GetIO().WantCaptureMouse} before
     \label{fig:imgui}
 \end{figure}
 
-% =========================================================================
-\section{Current Results}
-% =========================================================================
-
-The following components are fully implemented and working:
-
-\begin{itemize}
-    \item \textbf{Sphere impostors} — atoms rendered as GPU ray-cast spheres with instanced rendering, exact intersection, correct depth, and G-buffer output.
-    \item \textbf{Cylinder impostors} — bonds rendered as GPU ray-cast cylinders with tight NDC bounding box and axis-decomposed intersection.
-    \item \textbf{Deferred shading} — geometry pass fills the G-buffer; lighting pass applies Blinn-Phong per screen pixel.
-    \item \textbf{Ground plane} — flat quad below the molecule, integrated into the G-buffer pipeline.
-    \item \textbf{Shadow maps} — depth-only pass from the light's point of view with 64-sample adaptive hardware PCF (\texttt{sampler2DShadow} + Vogel disk + 8-sample early-out), matching Section 4 of the paper. Custom shadow shaders clip sphere and cylinder billboards to their correct silhouettes.
-    \item \textbf{SSAO} — 16-sample hemisphere kernel with noise-based rotation, box-blur smoothing, applied to the ambient term (eq.~\ref{eq:ssao}).
-    \item \textbf{Silhouette and crease lines} — Sobel edge detection on the G-buffer depth and normal textures, blended as dark outlines onto the lit scene. Implemented as described in Section 4 of Sigg et al.
-    \item \textbf{Composite pass} — intermediate RGB16F FBO with exposure control; clean separation between lighting and final output.
-    \item \textbf{ImGui panel} — live controls for molecule selection, lighting, SSAO, camera FOV, exposure, and auto-rotation, with a stats overlay.
-    \item \textbf{Runtime molecule switching} — 11 PDB structures selectable at runtime; VBOs and ground plane update without restarting.
-    \item \textbf{Orbit camera} — mouse drag to orbit, scroll to zoom, with correct HiDPI/Retina support.
-\end{itemize}
-
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.48\textwidth]{first_quadric.png}
