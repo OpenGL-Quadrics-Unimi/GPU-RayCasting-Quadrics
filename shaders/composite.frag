@@ -6,7 +6,7 @@ out vec4 FragColor;
 // The fully-lit scene rendered by the lighting pass.
 uniform sampler2D uScene;
 // Exposure multiplier (brightens or darkens the whole image uniformly)
-// 1.0 = no change. Controlled via ImGui when I'll implement the UI.
+// 1.0 = no change. 
 uniform float uExposure;
 
 void main()
