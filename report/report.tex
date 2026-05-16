@@ -1,4 +1,3 @@
-
 \documentclass[12pt, a4paper]{article}
 
 \usepackage[utf8]{inputenc}
@@ -111,7 +110,9 @@ To find where a ray $\mathbf{r}(t) = \mathbf{o} + t\,\mathbf{d}$ hits the surfac
     + \mathbf{o}^T \mathbf{Q} \mathbf{o} = 0
     \label{eq:rayquadric}
 \end{equation}
-This is a standard quadratic equation in $t$. If the discriminant is negative, the ray misses the surface.In our implementation we solve Equation~\ref{eq:rayquadric} directly in eye space for spheres, rather than using the parameter-space transformation described in~\cite{sigg2006}. The parameter-space approach becomes numerically unstable under perspective at zoom-out, because the matrix inversion used in the transformation becomes ill-conditioned. Eye-space intersection avoids this problem and is mathematically equivalent for spheres.
+This is a standard quadratic equation in $t$. If the discriminant is negative, the ray misses the surface.
+
+In our implementation we solve Equation~\ref{eq:rayquadric} directly in eye space for spheres, rather than using the parameter-space transformation described in~\cite{sigg2006}. The parameter-space approach becomes numerically unstable under perspective at zoom-out, because the matrix inversion used in the transformation becomes ill-conditioned. Eye-space intersection avoids this problem and is mathematically equivalent for spheres.
 
 \subsection{Impostor Technique}
 
@@ -120,20 +121,30 @@ Instead of sending one vertex per atom to the GPU, we generate a flat screen-fac
 \subsection{Deferred Shading}
 
 Deferred shading separates geometry processing from lighting. In the geometry pass, the fragment shader writes surface properties (colour, normal, depth) into a set of textures called the G-buffer. In the lighting pass, a fullscreen quad reads those textures and computes the final colour. With this structure, we ensure that complex lighting is calculated only once per screen pixel, regardless of how many objects overlap.
-
+\clearpage
 % =========================================================================
 \section{Project Architecture}
 % =========================================================================
 \begin{figure}[h!]
     \centering
-    \includegraphics[width=400]{pipeline.pdf}
+    \includegraphics[width=\textwidth]{pipeline.pdf}
     \caption{Per-Frame GPU Pipeline for Deferred Ray-Casting of Quadric Surfaces.}
     \label{fig:pipeline}
 \end{figure}
 
-The rendering pipeline is structured around the principles of deferred shading to effectively decouple complex lighting and post-processing from the underlying geometry. The process begins with the geometric inputs, leveraging instanced rendering by supplying the \texttt{AtomInstance Buffer}, \texttt{BondInstance Buffer}, and a shared \texttt{Quad VBO} to both the shadow and geometry passes. Initially, the shadow pass renders the scene from the light's perspective into a depth-only Framebuffer Object (FBO) to generate a \texttt{Shadow Map}. The geometry pass then processes the analytical impostors via ray-casting, populating the offscreen \texttt{G-Buffer} with per-pixel \texttt{Diffuse} color, eye-space \texttt{Normal}, and \texttt{Depth} information. Following this, the SSAO pass reads the depth and normal textures directly from the \texttt{G-Buffer} to compute screen-space ambient occlusion, outputting a single-channel \texttt{SSAO Texture}. 
+The pipeline adopts a \textbf{deferred shading architecture} so that the 
+costly lighting, shadow, and ambient-occlusion computations execute 
+exactly once per screen pixel, regardless of geometry overdraw. All 
+sphere and cylinder impostors share a single \textbf{four-vertex quad VBO} 
+rendered via instanced draw calls, with per-atom and per-bond data 
+supplied through separate instance buffers; the vertex shader computes 
+a \textbf{tight NDC bounding box} (Sigg et al., eq.~5) so each billboard covers 
+only the pixels it actually contributes to. Ray--surface intersection 
+is solved in \textbf{eye space} rather than the parameter-space transformation 
+described in the paper, avoiding the numerical instability of matrix 
+inversion under perspective at zoom-out. The six passes are described 
+in detail in the sections that follow (Figure~\ref{fig:pipeline}).
 
-Once the geometric and occlusion data are prepared, the pipeline advances to the lighting pass. This stage utilizes a fullscreen quad to sample the \texttt{G-Buffer}, \texttt{Shadow Map}, and \texttt{SSAO Texture}, computing the final illumination through the Blinn-Phong reflection model. It incorporates shadows and ambient occlusion before writing the lit scene to an intermediate \texttt{Scene Buffer}. To further enhance the visual perception of the molecular structures, the silhouette pass applies a Sobel edge detection filter using the \texttt{G-Buffer}'s depth and normal attachments. It seamlessly blends these detected dark creases and outlines with the lit scene from the \texttt{Scene Buffer}, outputting the enhanced result to an \texttt{Outline Buffer}. In the final stage, the composite pass reads this outline buffer, applies image-wide exposure adjustments via a \texttt{uExposure} uniform, and renders the final composited image directly to the \texttt{Screen}.
 
 % =========================================================================
 \section{Implementation}
@@ -184,7 +195,7 @@ The architecture is organized as follows: a compact \texttt{AtomInstance} record
 On the GPU side, the vertex buffer advances for each corner of the quad, while the instance buffer advances only once per atom via the \texttt{glVertexAttribDivisor} setting. As a result, thousands of atoms are rendered to the screen very fast through a single draw call:
 
 \begin{lstlisting}[style=cppstyle]
-glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, static_cast(atomInstances.size()));
+glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, static_cast<GLsizei>(atomInstances.size()));
 \end{lstlisting}
 
 This approach is critical for large molecules because it stores the atom data exactly once per instance, avoiding the need to duplicate the same data four times for the quad corners.
@@ -374,20 +385,47 @@ A flat quad is positioned at $y = -r_{\text{bound}} - 0.5$~\AA\ beneath the mole
 
 \subsubsection{Shadow Maps}
 
-A depth-only FBO with a $2048\times2048$ resolution and \texttt{GL\_DEPTH\_COMPONENT24} format is rendered once per frame from the light's point of view, employing an orthographic projection centered on the molecule. Since the scene is composed of analytical impostors rather than traditional geometry, the shadow pass utilizes specialized shaders to clip each billboard to its precise silhouette. Specifically, for spherical impostors, fragments residing outside the unit circle ($|\texttt{vCorner}| > 1$) are discarded to produce a circular footprint in the shadow map. In the case of cylinders, a 2D capsule signed-distance function in light-space NDC is applied to clip the billboard to the cylinder's projected silhouette, whereas the ground plane is processed via a standard depth-only pass without the need for additional clipping.
+A depth-only FBO at $2048\times2048$ resolution (\texttt{GL\_DEPTH\_COMPONENT24}) 
+is rendered once per frame from the light's point of view using an orthographic 
+projection fitted to the molecule's bounding radius. Since the scene consists 
+of analytical impostors rather than tessellated geometry, dedicated shadow 
+shaders clip each billboard to its correct silhouette: sphere billboards 
+discard fragments outside the unit circle ($|\texttt{vCorner}|^2 > 1$), 
+cylinder billboards apply a 2D capsule signed-distance function in 
+light-space NDC, and the ground plane uses a standard depth-only pass.
 
-In the lighting pass, the fragment's world-space position, reconstructed from the G-buffer depth and the \texttt{uInvView} matrix, is transformed into light space and compared against the shadow map. The implementation strictly adheres to the filtering methodology prescribed by the reference paper (Section 4, page 5), which notes that the intricate structural complexity of molecular models necessitates 64 shadow map samples to mitigate visible noise within the penumbra region. To optimize computational throughput, an adaptive sampling heuristic is employed, wherein an initial 8-sample set determines whether the full 64-sample kernel is required.
+In the lighting pass, the G-buffer depth is first unprojected to eye space 
+via \texttt{uInvProj}, then transformed to world space via \texttt{uInvView}, 
+and finally projected into light space via \texttt{uLightSpaceMatrix} for 
+the shadow map lookup. The implementation follows the approach described 
+by Sigg et al.:
 
 \begin{quote}
-\textit{``The small-scale molecule structures lead to highly complex shadow maps, thus requiring 64 shadow map samples to avoid visible noise inside the penumbra region. For better performance, the first 8 samples are used to adaptively determine whether the full 64 samples are required.''}
+\textit{``The small-scale molecule structures lead to highly complex shadow 
+maps, thus requiring 64 shadow map samples to avoid visible noise inside 
+the penumbra region. For better performance, the first 8 samples are used 
+to adaptively determine whether the full 64 samples are required.''}
 \end{quote}
-The implementation achieves high-fidelity shadows by integrating two complementary techniques. First, hardware-accelerated Percentage-Closer Filtering (PCF) is leveraged by configuring the shadow map with \texttt{GL\_LINEAR} filtering and the \texttt{GL\_COMPARE\_REF\_TO\_TEXTURE} (\texttt{GL\_LEQUAL}) comparison mode. By declaring the GLSL uniform as a \texttt{sampler2DShadow}, every \texttt{texture()} call executes a hardware-level bilinear depth comparison that returns a smooth floating-point value in the $[0, 1]$ range, effectively replacing the jagged binary results of manual comparisons on \texttt{GL\_NEAREST} textures. 
 
-Second, an adaptive 64-sample Vogel disk distribution is employed, where sample positions are generated inline using the Vogel disk formula to ensure an even, non-clumping circular spread via rotation by the golden angle. To optimize performance, an initial set of eight samples is evaluated; if these samples reach a consensus—indicating the fragment is either fully lit or fully shadowed—the remaining 56 lookups are bypassed as the fragment lies outside the penumbra. Otherwise, the full 64-sample kernel is processed. Together, these methods align with the paper's prescribed approach and successfully eliminate the visible stepping patterns characteristic of earlier 16-sample binary PCF implementations, as demonstrated by the shadow quality on the GFP molecule (1GFL) in Figure~\ref{fig:shadowsfinal}.
+The shadow map is configured with \texttt{GL\_LINEAR} filtering and 
+\texttt{GL\_COMPARE\_REF\_TO\_TEXTURE} (\texttt{GL\_LEQUAL}), so declaring 
+the GLSL uniform as \texttt{sampler2DShadow} makes every \texttt{texture()} 
+call a hardware bilinear depth comparison returning a smooth value in 
+$[0,\,1]$. Sample offsets follow a Vogel disk distribution --- successive 
+positions rotated by the golden angle for an even, non-clumping circular 
+spread. The first 8 samples are evaluated; if they all agree (fragment 
+fully lit or fully shadowed) the remaining 56 lookups are skipped. 
+Otherwise the full 64-sample kernel is processed and averaged. The result 
+is a continuous soft penumbra with no banding, as shown in 
+Figure~\ref{fig:shadowsfinal}.
+
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.70\textwidth]{shadows_final.png}
-    \caption{Smooth penumbra produced by 64-sample adaptive hardware PCF on the GFP molecule (1GFL). The soft falloff along the bottom-left sphere is continuous, with no banding or stair-stepping. The 8-sample early-out keeps the cost low: the frame rate stays above 60~fps.}
+    \caption{Smooth penumbra produced by 64-sample adaptive hardware PCF 
+    on the GFP molecule (1GFL). The soft falloff along the bottom-left 
+    sphere is continuous, with no banding or stair-stepping. The 8-sample 
+    early-out keeps the cost low: the frame rate stays above 60~fps.}
     \label{fig:shadowsfinal}
 \end{figure}
 
@@ -451,13 +489,22 @@ FragColor = vec4(texture(uScene, TexCoord).rgb * uExposure, 1.0);
 
 No tone mapping or gamma correction is applied. CPK atom colours are already chosen in perceptual (sRGB-like) space, so applying gamma would wash out the image rather than improve it. The intermediate buffer also provides a clean hook for future post-processing effects.
 
-\subsubsection{Interactive Control Interface}
+\subsubsection{ImGui Control Panel}
 
-Dear ImGui is integrated into the project architecture within the \texttt{external/imgui/} directory, encompassing the core source files along with the GLFW and OpenGL3 backends. This integration is managed by adding six specific source files to the \texttt{CMakeLists.txt} configuration. Every frame, a floating panel is rendered over the composited image, providing a centralized interface organized into several labeled sections for real-time scene management.
+Dear ImGui is vendored into \texttt{external/imgui/} (core source files plus the GLFW and OpenGL3 backends). A floating panel is drawn on top of the composited image every frame, divided into labelled sections:
 
-The Molecule section offers a selectable list of all eleven included PDB structures, where switching between entries triggers a comprehensive runtime reload. During this process, Vertex Buffer Objects are re-uploaded via \texttt{glBufferData}, and both the ground plane and camera systems are reset to fit the spatial bounds of the newly loaded molecule. Animation and viewing consistency are maintained through an auto-rotate toggle and a Reset View button that restores the initial camera pose. Detailed lighting control is provided via a three-axis slider for light direction, alongside parameters for ambient and specular strength, the shininess exponent, and a shadow toggle that determines whether the PCF lookup is bypassed during the lighting pass.
+\begin{itemize}
+    \item \textbf{Molecule} — selectable list of all 11 included PDB structures; switching triggers a runtime reload (VBOs are re-uploaded with \texttt{glBufferData}, the ground plane and camera are reset to fit the new molecule).
+    \item \textbf{Animation} — auto-rotate toggle and a ``Reset View'' button that restores the initial camera pose.
+    \item \textbf{Lighting} — light direction (three-axis slider), ambient strength, specular strength, shininess exponent, and a shadows on/off checkbox that bypasses the PCF lookup in the lighting pass.
+    \item \textbf{Ambient Occlusion} — enable/disable SSAO checkbox; AO radius slider, shown only when SSAO is active.
+    \item \textbf{Camera} — vertical field of view.
+    \item \textbf{Post-Process} — outlines on/off checkbox (Section~\ref{sec:silhouette}) and exposure multiplier.
+    \item \textbf{Stats} — live atom count, bond count, and frame rate.
+\end{itemize}
 
-Ambient occlusion settings allow for the dynamic activation of SSAO, which subsequently reveals a radius slider for granular control when the effect is active. General optical parameters such as the vertical field of view are managed in the Camera section, while the Post-Process section facilitates exposure adjustments and the toggling of silhouette outlines as described in Section~\ref{sec:silhouette}. To provide performance insights, the Stats section displays live data regarding atom and bond counts as well as the current frame rate. To ensure a seamless user experience, mouse and scroll callbacks invoke a \texttt{ImGui::GetIO().WantCaptureMouse} check before forwarding events to the camera system, thereby preventing interface interactions from inadvertently affecting the molecule's orientation. The final integrated control panel is illustrated in Figure~\ref{fig:imgui}.
+Mouse and scroll callbacks check \texttt{ImGui::GetIO().WantCaptureMouse} before forwarding events to the camera, so dragging a slider does not also orbit the molecule. Figure~\ref{fig:imgui} shows the final control panel.
+
 
 \begin{figure}[H]
     \centering
@@ -475,6 +522,8 @@ Ambient occlusion settings allow for the dynamic activation of SSAO, which subse
     \caption{Left: crambin (1CRN) after the initial deferred lighting pass (spheres only). Right: full pipeline — spheres, cylinders, ground plane, PCF shadows, and SSAO.}
     \label{fig:result}
 \end{figure}
+
+Figure~\ref{fig:result} shows the progression from the initial sphere-only lighting pass to the complete pipeline with cylinders, ground plane, shadows, and SSAO.
 
 % =========================================================================
 \section{Development Challenges}
@@ -520,6 +569,7 @@ if (fbDirty && fbWidth > 0 && fbHeight > 0) {
     ssaoBuf.create(fbWidth, fbHeight);
     ssaoBlurBuf.create(fbWidth, fbHeight);
     sceneBuf.create(fbWidth, fbHeight);
+    outlineBuf.create(fbWidth, fbHeight);
     fbDirty = false;
 }
 \end{lstlisting}
@@ -539,7 +589,7 @@ The aliasing that MSAA was designed to eliminate originates from tessellated pol
 
 What remains is a single residual: the \texttt{discard} at the impostor boundary is still a binary per-pixel decision, so the outermost row of pixels along a silhouette is either fully inside or fully outside. This produces a one-pixel-wide staircase. Compared to polygon meshes the artefact is barely visible because the staircase follows the smooth curvature of the sphere rather than the straight edges of triangles.
 
-\subsection{Alternative Anti-Aliasing Techniques and Their Limitations}
+\subsection{Why We Did Not Add FXAA or SSAA}
 
 \textbf{FXAA} is a post-process spatial filter that detects high-contrast edges in the final image and blurs them. It is compatible with deferred rendering (it runs after composite) and is cheap. However, FXAA cannot distinguish between a \emph{good} analytically computed edge and a \emph{bad} polygon edge: it would blur our mathematically correct silhouettes equally, degrading work that the fragment shaders just spent GPU cycles computing. The cure would be worse than the disease.
 
@@ -549,7 +599,7 @@ What remains is a single residual: the \texttt{discard} at the impostor boundary
 
 \subsection{Perceptual Edge Enhancement via Sobel Filtering}
 
-The paper does not implement geometric anti-aliasing at all. Instead, Sigg et al. improve perceptual edge quality by utilizing a non-photorealistic effect where a Sobel edge detection filter is applied to the G-buffer depth and normal textures. The resulting values are then blended as dark outlines on top of the Phong lighting as described in Section 4 on page 5. This approach addresses the perceptual challenge of distinguishing individual atoms from one another without introducing any pixel blurring. We have implemented this exact methodology, the details of which are provided in Section~\ref{sec:silhouette} and illustrated in Figure~\ref{fig:sobel}.
+The paper does not implement geometric anti-aliasing at all. Instead, Sigg et al.\ improve \emph{perceptual} edge quality through a non-photorealistic effect: a Sobel edge detection filter applied to the G-buffer depth and normal textures. The resulting values are then blended as dark outlines on top of the Phong lighting as described in Section 4 on page 5. This approach addresses the perceptual challenge of distinguishing individual atoms from one another without introducing any pixel blurring. We have implemented this exact methodology, the details of which are provided in Section~\ref{sec:silhouette} and illustrated in Figure~\ref{fig:sobel}.
 
 \subsection{Resolution of Shadow Penumbra Aliasing}
 
@@ -560,7 +610,7 @@ The first is hardware PCF: switching the shadow texture to \texttt{GL\_LINEAR} w
 Figure~\ref{fig:shadowsfinal} shows the result: the soft falloff along the shadow penumbra is now continuous, with no banding visible even at heavy zoom.
 \subsection{Summary}
 
-Our approach to edge quality in deferred rendering is therefore the combination of three deliberate choices: ray-casting impostors that give analytically correct silhouettes (so no MSAA/FXAA/SSAA needed for geometry); a Sobel silhouette-and-crease pass that handles the perceptual problem the paper highlights; and 64-sample adaptive hardware PCF that removes the genuine aliasing inside the soft shadow penumbra. The result is a deferred pipeline that, despite the architectural absence of MSAA, produces clean edges throughout the image.
+Our approach to edge quality in deferred rendering is therefore the combination of three deliberate choices: \textbf{ray-casting impostors} that give analytically correct silhouettes (so no MSAA/FXAA/SSAA needed for geometry); a \textbf{Sobel silhouette-and-crease pass} that handles the perceptual problem the paper highlights; and \textbf{64-sample adaptive hardware PCF} that removes the genuine aliasing inside the soft shadow penumbra. The result is a deferred pipeline that, despite the architectural absence of MSAA, produces clean edges throughout the image.
 
 % =========================================================================
 \section{Testing and Results}
@@ -611,7 +661,7 @@ Table~\ref{tab:scaling_amd} and Figure~\ref{fig:scaling_amd} show GPU and CPU fr
     \label{fig:pass_breakdown_amd}
 \end{figure}
 
-The frame time plateaus around 13~ms up to ~1000 atoms (fill-bound by SSAO and lighting), then rises gradually. At 60k atoms it reaches 24~ms (43~FPS), still fully interactive. Both machines follow the same shape; Figure~\ref{fig:compare_scaling} overlays them.
+The frame time plateaus around 13~ms up to ~1000 atoms (fill-bound by SSAO and lighting), then rises gradually. At 60k atoms it reaches 24~ms (43~FPS), still fully interactive. Figure~\ref{fig:pass_breakdown_amd} shows the per-pass cost breakdown across all molecules. Both machines follow the same shape; Figure~\ref{fig:compare_scaling} overlays them.
 
 \begin{figure}[H]
     \centering
@@ -653,9 +703,10 @@ Parsing scales linearly and stays below 45~ms. Bond detection is the bottleneck:
 \needspace{10\baselineskip} % 10
 \subsection{Discussion}
 
-Three primary conclusions follow from the performance data. First, geometry submission is highly efficient; the implementation of instanced rendering keeps the geometry pass well below a few milliseconds, even when processing up to 60,000 atoms.SSAO constitutes the primary GPU bottleneck, accounting for 40--50\% of the total frame budget at a 1080p resolution. Consequently, introducing a half-resolution SSAO target paired with bilateral upsampling would have the most substantial impact on overall performance optimization. Finally, the rendering pipeline scales predictably across different workloads. While fill-bound passes grow linearly in proportion to the framebuffer area, the shadow pass remains entirely resolution-independent, and no super-linear performance degradation was observed.
+Three conclusions follow from the data. First, geometry submission is cheap: instanced rendering keeps the geometry pass well below a few milliseconds even at 60k atoms. Second, \textbf{SSAO} is the primary GPU bottleneck, accounting for 40--50\% of the frame budget at 1080p; a half-resolution SSAO target with bilateral upsampling would have the largest impact on performance. Finally, the pipeline scales predictably: \textbf{fill-bound passes} grow linearly with framebuffer area, the \textbf{shadow pass} is resolution-independent, and no super-linear degradation was observed.
 
-When comparing these findings with the reference paper~\cite{sigg2006} in relative terms, Sigg et al.\ report that the silhouette pass occupies approximately 8\% of their frame budget, whereas our implementation accounts for roughly 14--17\%. This variance is structurally plausible given that our Sobel filter executes at full screen resolution, whereas their methodology relied on a separate, dedicated edge-detection pass.
+When comparing these findings with the reference paper~\cite{sigg2006} in relative terms, Sigg et al.\ report that the silhouette pass occupies approximately 8\% of their frame budget, while our implementation accounts for roughly 14--17\%. This variance is structurally plausible given that our Sobel filter executes at full screen resolution, whereas theirs used a dedicated edge-detection pass at reduced resolution.
+\clearpage
 % =========================================================================
 \section{Conclusion}
 % =========================================================================
@@ -666,12 +717,24 @@ The most significant technical insight encountered during development was the nu
 
 \subsection{Limitations}
 
-Several aspects of the current implementation present known technical limitations. First, the bond detection complexity relies on a pairwise distance check, resulting in an $O(N^2)$ performance cost relative to the number of atoms. While this approach remains acceptable for proteins containing a few thousand atoms, it introduces a noticeable computational delay when processing massive structures such as GroEL ($\approx 58\,000$ atoms) or the ribosome ($\approx 100\,000$ atoms). Integrating a spatial acceleration structure, such as a uniform grid or a k-d tree, would effectively reduce this complexity to $O(N \log N)$. Second,SSAO generates a noisy raw occlusion signal due to the limited allocation of 16 hemisphere samples. Although the application of a $4\times4$ box blur mitigates this variance, it does not fully eliminate the visual artifacts. Achieving a cleaner rendering would necessitate a larger blur kernel, importance-weighted sampling, or temporal accumulation techniques. Finally, the current shading architecture is restricted to a single directional light source; consequently, advanced illumination methods such as point lights, area lights, and image-based lighting are not currently implemented.
+Several aspects of the current implementation present known technical limitations. First, the \textbf{bond detection complexity} relies on a pairwise distance check, resulting in an $O(N^2)$ performance cost relative to the number of atoms. While this approach remains acceptable for proteins containing a few thousand atoms, it introduces a noticeable computational delay when processing massive structures such as GroEL ($\approx 58\,000$ atoms) or the ribosome ($\approx 100\,000$ atoms). Integrating a spatial acceleration structure, such as a \textbf{uniform grid} or a \textbf{k-d tree}, would effectively reduce this complexity to $O(N \log N)$. Finally, the current shading architecture is restricted to a \textbf{single directional light source}; consequently, advanced illumination methods such as \textit{point lights}, \textit{area lights}, and \textit{image-based lighting} are not currently implemented.
 
 \subsection{Future Work}
 
-Natural extensions to this project include introducing a toggle between ball-and-stick and space-fill representations, implementing temporal SSAO accumulation to achieve a noise-free signal at low sample counts, and adding per-atom selection and highlighting features. Furthermore, developing a spatial acceleration structure is a priority to ensure that loading large-molecule datasets remains interactive. The existing deferred rendering pipeline and the dedicated composite pass establish a highly extensible foundation, allowing any of these future additions to be integrated seamlessly without requiring a fundamental restructuring of the core render loop.
-
+\begin{itemize}
+    \item \textbf{Spatial acceleration for bond detection.} Replace the $O(N^2)$ pairwise 
+    distance check with a uniform grid or k-d tree to make large-molecule loading 
+    interactive ($O(N \log N)$).
+    \item \textbf{Representation toggle.} A space-fill mode (van der Waals spheres only, 
+    no cylinders) requires only disabling the cylinder draw call and adjusting atom radii.
+    \item \textbf{Per-atom selection and highlighting.} Atom picking via framebuffer 
+    object-ID rendering; highlight selected atoms with an outline or colour change.
+    \item \textbf{Extended colouring schemes.} Currently only CPK colouring is supported; 
+    per-chain, per-residue-type, or B-factor heat-map colouring are natural additions.
+    \item \textbf{Runtime PDB loading.} The molecule list is currently hardcoded to 11 
+    entries; a file-picker would make the viewer a general-purpose tool.
+\end{itemize} 
+\clearpage
 % =========================================================================
 \begin{thebibliography}{9}
 
